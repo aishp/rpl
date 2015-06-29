@@ -141,16 +141,17 @@ int dis_callback(lua_State *L)
 
 //(Payload, srcip, srcport)
 //function called when dio msg received on eport
+//actions to perform upon receipt of dio
+
 int disdio_callback(lua_State *L)
 {
-
-//actions to perform upon receipt of dio
-	
 	struct dio *msg = lua_touserdata(L,1);
 	char *srcip = lua_getstring(L, 2);
 	uint16_t srcport = lua_getnumber(L, 3);
 	struct dio *new =  lua_touserdata(L, lua_getglobal(L, "DIO"));
-	if(*new.rank > (*msg.rank + 1))
+
+	//check if the node is floating or has a rank greater than new parent
+	if(*new.rank == -1 || *new.rank > (*msg.rank + 1))
 	{
 		//set preferred parent
 		lua_setglobal(L, "PrefParent");
@@ -181,7 +182,7 @@ int create_disrecv_socket(lua_State *L)
 	lua_pushlightfunction(dis_callback);
 	lua_call(L,2,1);
 	lua_setglobal(L, "dis_sock");
-	return 1;
+	return 0;
 }
 
 //for dio broadcast
@@ -192,7 +193,7 @@ int create_dio_bsocket(lua_State *L)
 	lua_pushlightfunction(dio_callback);
 	lua_call(L,2,1);
 	lua_setglobal(L, "dio_sock");
-	return 1;
+	return 0;
 }
 
 //for multicasting dis and receiving dio unicast/broadcast
@@ -203,7 +204,7 @@ int create_disdio_socket(lua_State *L)
 	lua_pushlightfunction(recv_dio);
 	lua_call(L,2,1);
 	lua_setglobal(L, "disdio_sock");
-	return 1;
+	return 0;
 }
 
 int bcast_dio(lua_State *L)
@@ -235,11 +236,53 @@ int bcast_dis(lua_State *L)
 
 int leaf_func(lua_State *L)
 {
-	create_disdio_socket(L);
+	lua_pushlightfunction(L, create_disdio_socket);
+	lua_call(L, 0, 0);
+
 	struct dio *dio_msg= malloc(sizeof(struct dio));
 	dio_msg = dio_init(dio_msg, "leaf");
 	lua_pushlightuserdata(L, dio_msg);
 	lua_setglobal(L, "DIO");
-	
+
+	lua_newtable(L);
+	lua_setglobal(L, "routing_table");
+
+	//continue broadcasting DIS till node is grounded
+	do
+	{
+		lua_pushlightfunction(L, bcast_dis);
+		//**wait for a while**
+		
+		lua_getglobal(L, "DIO");
+		dio_msg= lua_touserdata(L, -1);
+		if((*dio_msg).grounded == 1)
+		{
+			break;
+		}
+	}while(1);
+}
+
+//actions that take place in a root node
+int root_func(lua_State *L)
+{
+	lua_pushlightfunction(L, create_dis_socket);
+	lua_call(L, 0, 0);
+
+	lua_pushlightfunction(L, create_dio_bsocket);
+	lua_call(L, 0, 0);
+
+	struct dio *msg = malloc(sizeof(struct dio));
+	msg = dio_init(msg, "root");
+	lua_pushlightuserdata(L, msg);
+	lua_setglobal(L, "DIOmsg");
+
+	lua_pushnumber(L, 0);
+	lua_setglobal(L, "TFLAG");
+
+	lua_newtable(L);
+	lua_setglobal(L, "routing_table");
 
 }
+	
+	
+
