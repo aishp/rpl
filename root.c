@@ -26,9 +26,9 @@ static const LUA_REG_TYPE rpl_meta_map[] =
  {LNILKEY, LNILVAL}
 };
 
-uint16_t cport = 49152;//socket for receiving dis
-uint16_t dport = 49153;//socket for broadcasting dio
-uint16_t bcast_port = 49154; //port on which other nodes listen for dio broadcast
+uint16_t cport = 49152;//socket for receiving DIO, unicast DIO
+uint16_t dport = 49153;//socket for broadcasting dio according to trickle timer
+uint16_t dio_port = 49154; //port on which other nodes broadcast DIS and listen for DIO
 
 storm_socket_t *sock;
 
@@ -78,27 +78,21 @@ char *dio_create(struct dio d)
 //function called when dis msg received on cport
 int dis_callback(lua_State *L)
 {
-	//actions to perform upon receipt of dis	
+
+//actions to perform upon receipt of dis	
 	char *payload = lua_getstring(L,1);
 	char *srcip = lua_getstring(L, 2);
 	uint16_t srcport = lua_getnumber(L, 3);
 
-	lua_getglobal(L, "routing_table");
-	int self_index = lua_gettop(L);
-	lua_gettable(L, self_index, "count");
-	int cur_count = lua_pop(L);
-	cur_count++;
-	lua_pushnumber(L,cur_count);
+//global routing table gets pushed to top of the stack
+	lua_getglobal(L, "routing_table"); //table is at -1
 	lua_pushstring(L, srcip);
-	lua_settable(L, self_index);
-	lua_pushstring(L, "count");
-	lua_pushnumber(L, cur_count);
-	lua_settable(L, self_index);
-	lua_pushnumber(L, self_index);
+	lua_pushstring(L, srcport);
+	lua_settable(L, -3); //table is at -3 now
 	lua_setglobal(L, "routing_table");
 
-	//unicast back DIO
-	//***CREATE DIO MESSAGE SOMEWHERE ***
+//unicast back DIO
+//***CREATE DIO MESSAGE SOMEWHERE ***
 	
 	lua_getglobal(L, "DIOmsg");
 	struct dio *msg = lua_touserdata(L, -1);
@@ -107,12 +101,12 @@ int dis_callback(lua_State *L)
 	do
 	{
 		lua_pushlightfunction(L, libstorm_net_sendto);
-		//storm.net.sendto(socket, payload, address, destport) -> number
+//storm.net.sendto(socket, payload, address, destport) -> number
 		lua_getglobal(L, "dis_sock");
-		//storm_socket_t *dsock = lua_touserdata(L, lua_gettop(L));
+//storm_socket_t *dsock = lua_touserdata(L, lua_gettop(L));
 		lua_pushstring(L, msg);
 		lua_pushstring(L, srcip);
-		lua_pushnumber(L, srcport);
+		lua_pushnumber(L, dio_port);
 		lua_call(L,4,1);
 		rv= lua_checknumber(L, gettop(L));
 		
@@ -126,44 +120,55 @@ int dis_callback(lua_State *L)
 		//launch trickle timer
 	}
 	      
-
 }
 
+//for recieving dis and invoking callback
 int create_dis_socket(lua_State *L)
 {
 	//create socket for receiving dis messages
 	lua_pushlightfunction(L, libstorm_net_udpsocket);
 	lua_pushnumber(cport);
-	lua_pushlightfunction(udpsocket_callback);
+	lua_pushlightfunction(dis_callback);
 	lua_call(L,2,1);
-	int sock_index = lua_gettop(L);
 	lua_setglobal(L, "dis_sock");
 	return 1;
 }
 
-
-int create_diobcastsocket(lua_State *L)
+//for dio broadcast
+int create_dio_socket(lua_State *L)
 {
-	//create socket for receiving dis messages
 	lua_pushlightfunction(L, libstorm_net_udpsocket);
 	lua_pushnumber(dport);
-	lua_pushlightfunction(udpsocket_callback);
+	lua_pushlightfunction(dio_callback);
 	lua_call(L,2,1);
-	int sock_index = lua_gettop(L);
 	lua_setglobal(L, "dio_sock");
 	return 1;
 }
 
+int bcast_dio(lua_State *L)
+{
+	//libstorm_net_sendto(socket, payload, ip, port)
+	//multicast address: "ff02::1"
+	lua_pushlightfunction(L, libstorm_net_sendto);
+	lua_getglobal(L, "dio_sock");
+	lua_getglobal(L, "DIOmsg");
+	lua_pushstring(L, "ff02::1");
+	lua_pushnumber(L, dio_port);
+	lua_call(L, 4, 1);
+	return 0;
+	
+}	
+		
 int bcast_dis(lua_State *L)
 {
-	lua_pushlightfunction(L, libstorm_net_sendto);
+	//libstorm_net_sendto(socket, payload, ip, port)
 	//multicast address: "ff02::1"
+	lua_pushlightfunction(L, libstorm_net_sendto);
 	lua_getglobal(L, "dio_sock");
 	lua_getglobal(L, "DIOmsg");
 	lua_pushstring(L, "ff02::1");
 	lua_pushnumber(L, bcast_port);
 	lua_call(L, 4, 1);
+	return 0;
 	
 }	
-		
- 
