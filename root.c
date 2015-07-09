@@ -99,52 +99,95 @@ char *dio_create(struct dio d)
 	return dio_msg;		
 }
 
+int i_timeout(lua_State *L)
+{
+	int t= lua_tonumber(L, lua_upvalueindex(1));
+	int i= lua_tonumber(L, lua_upvalueindex(2));
+	int l_inst= lua_tonumber(L, lua_upvalueindex(3)); //local instance number
+	int imin, imax;
+	
+	//first check if the current trickle instance is same as instance running
+	//global instance
+	lua_getglobal(L, "TRICKLE_INSTANCE");
+	int g_inst = lua_tonumber(L, -1);
+	if(g_inst!= l_inst)
+	{
+		//new instance of trickle timer has been started, this one must be stopped
+		return 0;
+	}
+	else
+	{
+		//i timed out, double i
+		lua_getglobal(L, "IMIN");
+		imin = lua_tonumber(L, -1);
+		lua_getglobal(L, "IMAX");
+		imax = lua_tonumber(L, -1);
+		
+		if((2*i)<(imin*(2^imax)))
+		{
+			i*=2;
+		}	
+	
+		else
+		{
+			i = imin * (2^imax);
+		}
+		lua_pushnumber(L, t);
+		lua_pushnumber(L, i);
+		lua_pushnumber(L, l_inst); 
+		lua_set_continuation(L, trickle_continuation, 3);
+		
+		//call trickle_continuation after t ticks
+		return nc_invoke_sleep(L, (t) * SECOND_TICKS);
+	}
+}
+
 int trickle_continuation(lua_State *L)
 {
 	//function invoked after t ticks, time to check if c<k and transmit
 
 	int t= lua_tonumber(L, lua_upvalueindex(1));
 	int i= lua_tonumber(L, lua_upvalueindex(2));
-	int l_inst= lua_tonumber(L, lua_upvalueindex(3));
+	int l_inst= lua_tonumber(L, lua_upvalueindex(3)); //local instance number
+	
+	
 	//first check if the current trickle instance is same as instance running
 	//global instance
 	lua_getglobal(L, "TRICKLE_INSTANCE");
 	int g_inst = lua_tonumber(L, -1);
-	if()
-	lua_getglobal(L, "C");
-	c=lua_tonumber(L, -1);
-	
-	if(c<k)
+	if(g_inst!= l_inst)
 	{
-		//transmit
-		lua_pushlightfunction(L, bcast_dio);
-		lua_call(L, 0, 0);
+		//new instance of trickle timer has been started, this one must be stopped
+		return 0;
 	}
-
 	else
 	{
-		//reset all values
-		lua_pushnumber(L, 0);
-		lua_setglobal(L, "C");
-		i = imin;
-		t = (rand() % ((i)-(i/2))) + (i/2);
-		break; 
-	}
-	do
-	{
-		lua_getglobal(L, "i_timeout_flag");
-		iflag= lua_tonumber(L, -1);
-	}while (iflag!=0);
-
-	//i timed out, double i
-	if((2*i)<(imin*(2^imax)))
-	{
-		i*=2;
-	}
+		lua_getglobal(L, "C");
+		c=lua_tonumber(L, -1);
+		
+		if(c<k)
+		{
+			//transmit
+			lua_pushlightfunction(L, bcast_dio);
+			lua_call(L, 0, 0);
+		}
 	
-	else
-	{
-		i = imin * (2^imax);
+		else
+		{
+			//reset all values
+			lua_pushnumber(L, 0);
+			lua_setglobal(L, "C");
+			i = imin;
+			t = (rand() % ((i)-(i/2))) + (i/2);
+			break; 
+		}
+		
+		lua_pushnumber(L, t);
+		lua_pushnumber(L, i);
+		lua_pushnumber(L, l_inst); 
+		lua_set_continuation(L, i_timeout, 3);
+		//call trickle_continuation after t ticks
+		return nc_invoke_sleep(L, (i-t) * SECOND_TICKS);
 	}
 }
 
