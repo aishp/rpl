@@ -442,7 +442,7 @@ int float_func(lua_State *L)
 	do
 	{
 		lua_pushlightfunction(L, bcast_dis);
-		//**wait for a while**
+		//WAIT FOR A WHILE
 		
 		lua_getglobal(L, "DIO");
 		dio_msg= lua_touserdata(L, -1);
