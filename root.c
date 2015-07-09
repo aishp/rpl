@@ -436,7 +436,7 @@ int float_func(lua_State *L)
 	lua_setglobal(L, "DIO");
 
 	lua_newtable(L);
-	lua_setglobal(L, neighbor_table");
+	lua_setglobal(L, "neighbor_table");
 
 	//continue broadcasting DIS till node is grounded
 	do
@@ -471,7 +471,7 @@ int ground_func(lua_State *L)
 	lua_setglobal(L, "TFLAG");
 
 	lua_newtable(L);
-	lua_setglobal(L, neighbor_table");
+	lua_setglobal(L, "neighbor_table");
 
 }
 	
