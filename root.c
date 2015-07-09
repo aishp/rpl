@@ -99,6 +99,56 @@ char *dio_create(struct dio d)
 	return dio_msg;		
 }
 
+int trickle_continuation(lua_State *L)
+{
+	//function invoked after t ticks, time to check if c<k and transmit
+
+	int t= lua_tonumber(L, lua_upvalueindex(1));
+	int i= lua_tonumber(L, lua_upvalueindex(2));
+	int l_inst= lua_tonumber(L, lua_upvalueindex(3));
+	//first check if the current trickle instance is same as instance running
+	//global instance
+	lua_getglobal(L, "TRICKLE_INSTANCE");
+	int g_inst = lua_tonumber(L, -1);
+	if()
+	lua_getglobal(L, "C");
+	c=lua_tonumber(L, -1);
+	
+	if(c<k)
+	{
+		//transmit
+		lua_pushlightfunction(L, bcast_dio);
+		lua_call(L, 0, 0);
+	}
+
+	else
+	{
+		//reset all values
+		lua_pushnumber(L, 0);
+		lua_setglobal(L, "C");
+		i = imin;
+		t = (rand() % ((i)-(i/2))) + (i/2);
+		break; 
+	}
+	do
+	{
+		lua_getglobal(L, "i_timeout_flag");
+		iflag= lua_tonumber(L, -1);
+	}while (iflag!=0);
+
+	//i timed out, double i
+	if((2*i)<(imin*(2^imax)))
+	{
+		i*=2;
+	}
+	
+	else
+	{
+		i = imin * (2^imax);
+	}
+}
+
+
 int trickle_timer(lua_State *L)
 {
 	//initialize random number generator
@@ -106,22 +156,28 @@ int trickle_timer(lua_State *L)
 	
 	//minimum interval size in seconds
 	int imin = 5; 
+	lua_pushnumber(L, imin);
+	lua_setglobal(L, "IMIN");
 	
 	//number of doublings of imin	
 	int imax = 16; 
-	
+	lua_pushnumber(L, imax);
+	lua_setglobal(L, "IMAX");
 	//number of consistent messages for no transmission
 	int k = 1; 
-
+	lua_pushnumber(L, k);
+	lua_setglobal(L, "K");
+	
 	//current interval size, random number between imin and imax
  	int i = (rand() % ((imin* (2^imax))-imin)) + 1; 
 	
 	//counter	
 	int c=0; 
-	
+	lua_pushnumber(L, c);
+	lua_setglobal(L, "C");
 	// a time within the current interval, random number between (i/2) and i
 	int t = (rand() % ((i)-(i/2))) + (i/2) + 1;
-
+	
 	//variable for checking timeout flag
 	int tflag;
 	int iflag;
@@ -133,70 +189,19 @@ int trickle_timer(lua_State *L)
 	//create i timeout flag
 	lua_setglobal(L, "i_timeout_flag");
 
-	//socket for listening to data: 
+	//socket for listening to data: eport 49154
 	//disdis_callback(): received DIO, changes the value of "c"
 
 	//start first interval 
-	//while timeout_flag=0, keep listening on port
-	do
-	{
-		lua_pushlightfunction(L, libstorm_os_invoke_later);
-		lua_pushnumber(L, (t) * SECOND_TICKS);
-		lua_pushvalue(L, t_timeout);
-		lua_call(L, 2, 0);
-
-		lua_pushlightfunction(L, libstorm_os_invoke_later);
-		lua_pushnumber(L, (i) * SECOND_TICKS);
-		lua_pushvalue(L, i_timeout);
-		lua_call(L, 2, 0);
+	//trickle_continuation(t, i, inst)->0 (keeps running)
+	//lua_pushlightfunction(L, trickle_continuation);
+	lua_pushnumber(L, t);
+	lua_pushnumber(L, i);
+	lua_getglobal(L, "TRICKLE_INSTANCE"); 
+	lua_set_continuation(L, trickle_continuation, 3);
+	//call trickle_continuation after t ticks
+	return nc_invoke_sleep(L, t * SECOND_TICKS);
 	
-		do
-		{
-			lua_getglobal(L, "t_timeout_flag");
-			tflag= lua_tonumber(L, -1);
-
-		}while (tflag!=0);
-
-		//now interval is over
-		lua_getglobal(L, "C");
-		c=lua_tonumber(L, -1);
-	
-		if(c<k)
-		{
-			//transmit
-		
-		}
-
-		else
-		{
-			//reset all values
-			lua_pushnumber(L, 0);
-			lua_setglobal(L, "C");
-			i = imin;
-			t = (rand() % ((i)-(i/2))) + (i/2);
-			break; 
-		}
-
-		do
-		{
-			lua_getglobal(L, "i_timeout_flag");
-			iflag= lua_tonumber(L, -1);
-
-		}while (iflag!=0);
-
-		//i timed out, double i
-		if((2*i)<(imin*(2^imax)))
-		{
-			i*=2;
-		}
-	
-		else
-		{
-			i = imin * (2^imax);
-		}
-
-	}while(1);
-
 }
 //(Payload, srcip, srcport)
 //function called when dis msg received on cport
@@ -241,11 +246,14 @@ int dis_callback(lua_State *L)
 	
 	if(tflag==0)
 	{
-
-		//set TFLAG
+		//set TFLAG to show that trickle timer is now running
 		lua_pushnumber(L, 1);
 		lua_setlobal(L, "TFLAG");
-
+		
+		//set global trickle instance flag, to keep track whether we are running the right instance or an old instance
+		lua_pushnumber(L, 0);
+		lua_setglobal(L, "TRICKLE_INSTANCE"); 
+		
 		//call the trickle timer, let it run concurrently in the background
 		trickle_timer(L);
 	}
@@ -290,9 +298,16 @@ int disdio_callback(lua_State *L)
 
 		if((*new).rank > ((*msg).rank+1))
 		{
-			//inconsistent state reached, reset C
-			lua_pushnumber(L, 0);
-			lua_setglobal(L, "C");
+			//inconsistent state reached, reset everything and start trickle timer again
+			
+			//**STOP THE OLD INSTANCE OF TRICKLE TIMER**
+			lua_getglobal(L, "TRICKLE_INSTANCE");
+			int inst = lua_tonumber(L, -1);
+			inst++;
+			lua_pushnumber(L, inst);
+			lua_setglobal(L, "TRICKLE_INSTANCE");
+			
+			trickle_timer();
 		}
 		
 	}
