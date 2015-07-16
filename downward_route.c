@@ -1,3 +1,5 @@
+//NON-STORING MODE
+
 #define dao_port 49161
 struct dao
 {
