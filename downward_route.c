@@ -36,12 +36,21 @@ int dao_callback(lua_State *L)
 		char self_ip[40] = lua_tostring(L, -1);
 		strcpy(msg.route[msg.n], self_ip);
 		msg.n++;
-		lua_pushlightfunction(L, send_dao);
-		lua_pushlightuserdata(L, msg);
-		lua_pushstring(L, parent_ip);
+		lua_pushlightfunction(L, libstorm_net_sendto);
+		lua_getglobal(L, "dao_sock"); //socket
+		lua_pushlightuserdata(L, msg); //payload (should it be packed?)
+		
+		 //Dest Addr (parent ip)
+		lua_getglobal(L, "PrefParent");
+		struct *pdio= lua_touserdata(L, -1);
+		lua_pop(L, 1); //pop DIO from stack
+		lua_pushstring(L, pdio->sip); //Parent IP Address for forwarding
+		
+		lua_pushnumber(L,dao_port); //destination port same as recieving port
+		
 		while(rv!=1)
 		{
-			lua_call(L, 2, 1);
+			lua_call(L, 4, 1);
 			//**WAIT FOR A WHILE
 			rv = lua_tonumber(L, -1);
 		}
