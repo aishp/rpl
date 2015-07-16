@@ -2,8 +2,8 @@
 struct dao
 {
 	uint16_t node_id;
-	char *dst;
-	char **route;
+	char *dst; //IP address of destination from root (node that initiates DAO)
+	char **route; //Starts with parent of DST
 	int n; //number of hops
 };
 
@@ -67,3 +67,38 @@ int create_dao_socket(lua_State *L)
 	return 0;
 }
 
+int send_dao(lua_State *L)
+{
+	//Create and send DAO
+	struct dao *d= new struct dio();
+	int rv=0;
+	
+	lua_pushlightfunction(L,libstorm_os_getnodeid);
+	lua_call(L, 0, 1);
+	d->node_id = lua_tonumber(L, -1);
+	
+	lua_pushlightfunction(L, libstorm_os_getipaddrstring);
+	lua_call(L, 0, 1);
+	d->dst= lua_tostring(L, -1); //CHECK IF THIS IS POSSIBLE
+	
+	d->n=0;
+	
+	lua_pushlightfunction(L, libstorm_net_sendto);
+	lua_getglobal(L, "dao_sock"); //socket
+	lua_pushlightuserdata(L, msg); //payload (should it be packed?)
+		
+	 //Dest Addr (parent ip)
+	lua_getglobal(L, "PrefParent");
+	struct *pdio= lua_touserdata(L, -1);
+	lua_pop(L, 1); //pop DIO from stack
+	lua_pushstring(L, pdio->sip); //Parent IP Address for forwarding
+		
+	lua_pushnumber(L,dao_port); //destination port same as recieving port
+		
+	while(rv!=1)
+	{
+		lua_call(L, 4, 1);
+		//**WAIT FOR A WHILE
+		rv = lua_tonumber(L, -1);
+	}
+}
