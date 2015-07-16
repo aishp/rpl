@@ -249,7 +249,7 @@ int dis_callback(lua_State *L)
 	lua_pushstring(L, srcip);
 	lua_pushstring(L, srcport);
 	lua_settable(L, -3); //table is at -3 now
-	lua_setglobal(L, neighbor_table");
+	lua_setglobal(L, "neighbor_table");
 
 //unicast back DIO
 //***CREATE DIO MESSAGE SOMEWHERE ***
