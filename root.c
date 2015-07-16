@@ -42,6 +42,8 @@ struct dio
 	uint8_t reserved; // 8 bits reserved
 	const char *dodag_id; //128 bit IPV6 address
 	uint8_t etx; //estimated hops left, 8 bit
+	const char *sip; //self ip address
+	uint16_t nid; //self node id
 };
 
 struct dio *dio_init(struct dio *d, char *node)
@@ -69,6 +71,17 @@ struct dio *dio_init(struct dio *d, char *node)
 		(*d).dodag_id =-1;
 		(*d).etx = 10; // maximum estimated hops left
 	}
+	
+	//set self ip address
+	lua_pushlightfunction(L, libstrom_os_getipaddrstring);
+	lua_call(L, 0, 1)
+	(*d).sip=lua_tostring(L, -1);
+	
+	//set self node id
+	lua_pushlightfunction(L, libstorm_os_getnodeid);
+	lua_call(L, 0, 1)
+	(*d).nid=lua_tonumber(L, -1);
+	
 	return d;
 
 	
