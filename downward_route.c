@@ -28,6 +28,20 @@ int dao_callback(lua_State *L)
 		lua_pushlightuserdata(L, route);
 		lua_settable(L, -3);
 		lua_setglobal(L, "routing_table");
+		
+		//Send DAO ACK to originating node
+		lua_pushlightfunction(L, libstorm_net_sendto);
+		lua_getglobal(L, "dao_sock"); //socket
+		lua_pushstring(L, "DAO ACK"); //payload (What should DAO ACK be?)
+		lua_pushstring(L, msg->dst); //Dest Addr (node ip)
+		lua_pushnumber(L,dao_port); //destination port same as recieving port
+			
+		while(rv!=1)
+		{
+			lua_call(L, 4, 1);
+			//**WAIT FOR A WHILE
+			rv = lua_tonumber(L, -1);
+		}
 	}
 	else
 	{
