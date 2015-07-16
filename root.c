@@ -245,7 +245,7 @@ int dis_callback(lua_State *L)
 	int  rv=0; //return value from libstorm_net_sendto
 	
 //global neighbor table gets pushed to top of the stack
-	lua_getglobal(L, neighbor_table"); //table is at -1
+	lua_getglobal(L, "neighbor_table"); //table is at -1
 	lua_pushstring(L, srcip);
 	lua_pushstring(L, srcport);
 	lua_settable(L, -3); //table is at -3 now
@@ -333,11 +333,11 @@ int disdio_callback(lua_State *L)
 		lua_setglobal(L, "DIO");
 
 		//add to neighbor list
-		lua_getglobal(L, neighbor_table");
+		lua_getglobal(L, "neighbor_table");
 		lua_pushstring(L, srcip);
 		lua_pushnumber(srcport);
 		lua_settable(L, -3);
-		lua_setglobal(L, neighbor_table");
+		lua_setglobal(L, "neighbor_table");
 
 		if((*new).rank > ((*msg).rank+1))
 		{
