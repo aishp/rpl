@@ -98,7 +98,9 @@ char *dio_create(struct dio d)
 	//Reserved (8)
 	//DODAG ID (128) - char *
 	//ETX (8)
-	sprintf(dio_msg, "%u\n%u\n%d\n%d\n%u\n%u\n%s\n%u\n", d.instance_id, d.rank, d.grounded, d.mop, d.dtsn, d.reserved, d.dodag_id, d.etx);
+	//Self_ip - char*
+	//node_id - uint_16
+	sprintf(dio_msg, "%u\n%u\n%d\n%d\n%u\n%u\n%s\n%u\n%s\n%u\n", &d.instance_id, &d.rank, &d.grounded, &d.mop, &d.dtsn, &d.reserved, d.dodag_id, &d.etx, d.sip, &d.nid);
 	printf("The assembled DIO message is: %s\n", dio_msg);
 	return dio_msg;		
 }
@@ -326,16 +328,18 @@ int disdio_callback(lua_State *L)
 	char *srcip = lua_getstring(L, 2);
 	uint16_t srcport = lua_getnumber(L, 3);
 	
+	lua_getglobal(L, "C");
+	int c= lua_tonumber(L, -1);
+	
 	lua_getglobal(L, "DIO")
 	struct dio *new =  lua_touserdata(L, -1); //self dio
 
-	lua_getglobal(L, "C");
-	int c= lua_tonumber(L, -1);
+	
 
 	//check if the node is floating or has a rank greater than new parent
 	if(*new.rank == -1 || *new.rank > (*msg.rank + 1))
 	{
-		//set preferred parent
+		//set preferred parent as incoming DIO, which is on top of the stack
 		lua_setglobal(L, "PrefParent");
 
 		//Calculate rank and update grounded status
