@@ -40,10 +40,16 @@ struct dio
 	int mop; //2 bit flag indicating mode of operation (storing/ non-storing)
 	uint8_t dtsn;// 8 bit flag used to maintain downward routes
 	uint8_t reserved; // 8 bits reserved
-	const char *dodag_id; //128 bit IPV6 address
+	uint16_t *dodag_id; //128 bit IPV6 address
 	uint8_t etx; //estimated hops left, 8 bit
 	const char *sip; //self ip address
 	uint16_t nid; //self node id
+};
+
+struct dis
+{
+	uint16_t *dodag_id;
+	int rank;
 };
 
 struct dio *dio_init(struct dio *d, char *node)
@@ -52,11 +58,10 @@ struct dio *dio_init(struct dio *d, char *node)
 	{
 		(*d).instance_id=1; // first instance 
 		(*d).rank = 1; // root has rank 1
-		(*d).grounded = 0; 
+		(*d).grounded = 1; 
 		(*d).mop = 1; //storing mode	
 		(*d).dtsn = 0;
 		(*d).reserved = 0;
-		(*d).dodag_id =1;
 		(*d).etx = 10; // maximum estimated hops left
 	}
 	
@@ -381,8 +386,8 @@ int disdio_callback(lua_State *L)
 	}
 }
 
-//for recieving dis and invoking callback
-int create_disrecv_socket(lua_State *L)
+//for receiving dis and replying with DIO unicast
+int create_dis_socket(lua_State *L)
 {
 	//create socket for receiving dis messages
 	lua_pushlightfunction(L, libstorm_net_udpsocket);
@@ -393,7 +398,7 @@ int create_disrecv_socket(lua_State *L)
 	return 0;
 }
 
-//for dio broadcast
+//for DIO broadcast according to trickle timer
 int create_dio_bsocket(lua_State *L)
 {
 	lua_pushlightfunction(L, libstorm_net_udpsocket);
@@ -404,7 +409,7 @@ int create_dio_bsocket(lua_State *L)
 	return 0;
 }
 
-//for multicasting dis and receiving dio unicast/broadcast
+//for multicasting DIS and receiving DIO unicast/broadcast
 int create_disdio_socket(lua_State *L)
 {
 	lua_pushlightfunction(L, libstorm_net_udpsocket);
@@ -435,7 +440,7 @@ int bcast_dis(lua_State *L)
 	//multicast address: "ff02::1"
 	lua_pushlightfunction(L, libstorm_net_sendto);
 	lua_getglobal(L, "dio_sock");
-	lua_getglobal(L, "DIOmsg");
+	lua_getglobal(L, "DISmsg");
 	lua_pushstring(L, "ff02::1");
 	lua_pushnumber(L, bcast_port);
 	lua_call(L, 4, 1);
@@ -473,22 +478,44 @@ int float_func(lua_State *L)
 //actions that take place in a root node
 int ground_func(lua_State *L)
 {
+	//socket for listening to DIS and responding with DIO unicast
 	lua_pushlightfunction(L, create_dis_socket);
 	lua_call(L, 0, 0);
 
+	//socket for DIO bcast according to trickle timer
 	lua_pushlightfunction(L, create_dio_bsocket);
 	lua_call(L, 0, 0);
 
+	//Create self DIO msg, initialize as root
 	struct dio *msg = malloc(sizeof(struct dio));
 	msg = dio_init(msg, "root");
+	
+	lua_pushlightfunction(L, libstorm_os_getnodeid)
+	lua_call(L, 0, 1);
+	msg->dodag_id=lua_tonumber(L, -1);
+	lua_pop(L); //remove node id from stack
+	
 	lua_pushlightuserdata(L, msg);
 	lua_setglobal(L, "DIOmsg");
 
+	//create and set global DIS msg
+	struct dis *dis_msg = malloc(sizeof(struct dis));
+	dis_msg->rank=1;
+	dis_msg->dodag_id= msg->dodag_id;
+	lua_pushlightuserdata(L, dis_msg);
+	lua_setglobal(L, "DISmsg");
+	
+	//set TFLAg to 0 to show that trickle timer is not currently running
 	lua_pushnumber(L, 0);
 	lua_setglobal(L, "TFLAG");
 
+	//set empty neighbor table
 	lua_newtable(L);
 	lua_setglobal(L, "neighbor_table");
+	
+	//set empty routing table
+	lua_newtable(L);
+	lua_setglobal(L, "routing_table");
 
 }
 	
