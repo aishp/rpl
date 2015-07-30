@@ -116,7 +116,7 @@ int ground_func(lua_State *L)
 	struct dio *msg = malloc(sizeof(struct dio));
 	msg = dio_init(msg, "root");
 	
-	lua_pushlightfunction(L, libstorm_os_getnodeid)
+	lua_pushlightfunction(L, libstorm_os_getnodeid);
 	lua_call(L, 0, 1);
 	msg->dodag_id=lua_tonumber(L, -1);
 	lua_pop(L); //remove node id from stack
