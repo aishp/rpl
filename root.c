@@ -25,9 +25,9 @@ LIST OF GLOBAL VARIABLES
 	{LSTRKEY("float_func"), LFUNCVAL(rpl_float_func)}, \
 	{LSTRKEY("ground_func"), LFUNCVAL(rpl_ground_func)}, \
 
-uint16_t cport = 49152;//socket for receiving DIO, unicast DIO
-uint16_t dport = 49153;//socket for broadcasting dio according to trickle timer
-uint16_t eport = 49154; //port on which other nodes broadcast DIS and listen for DIO
+uint32_t cport = 49152;//socket for receiving DIS, unicast DIO (disport)
+uint32_t dport = 49153;//socket for broadcasting dio according to trickle timer
+uint32_t eport = 49154; //port on which other nodes broadcast DIS and listen for DIO
 
 storm_socket_t *sock;
 
