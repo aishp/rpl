@@ -1,8 +1,10 @@
 /* GLOBAL VALUES
 
 DIO
-
-
+DIS
+TFLAG
+neighbor_table
+routing_table
 
 */
 
@@ -23,6 +25,7 @@ struct dio
 
 int dio_init_root(lua_State *L)
 {
+	//DIO = { Rank, G/F, Dodag ID, ETX, Node ID, Version }
 	lua_createtable(L, 0, 6);
 	int table_index=lua_gettop(L);
 	lua_pushstring(L, "rank");
@@ -34,7 +37,7 @@ int dio_init_root(lua_State *L)
 	lua_pushstring(L, "dodag_id");
 	lua_pushnumber(L, 1); //find out how to assign
 	lua_settable(L, table_index);
-	lua_pushstring(L, "etx");
+	lua_pushstring(L, "etx"); //same as rank?
 	lua_pushnumber(L, 0);
 	lua_settable(L, table_index);
 	lua_pushstring(L, "node_id");
@@ -44,8 +47,26 @@ int dio_init_root(lua_State *L)
 	lua_pushstring(L, "version");
 	lua_pushnumber(L, 0); 
 	lua_settable(L, table_index);
-	lua_pushvalue(L, table_index);
+	//following line might not be necessary:
+	//lua_pushvalue(L, table_index);
 	lua_setglobal(L, "DIO");
+	return 0;
+}
+
+int dis_init_root(lua_State *L)
+{
+	//DIS = {Rank, Node ID}
+
+	lua_createtable(L, 0, 2);
+	int table_index=lua_gettop(L);
+	lua_pushstring(L, "rank");
+	lua_pushnumber(L, 1);
+	lua_settable(L, table_index);
+	lua_pushstring(L, "node_id");
+	lua_pushlightfunction(L, libstorm_os_getnodeid);	
+	lua_call(L, 0, 1);
+	lua_settable(L, table_index);
+	lua_setglobal(L, "DIS");
 	return 0;
 }
 //actions to perform upon receipt of dis	
@@ -143,23 +164,13 @@ int ground_func(lua_State *L)
 	lua_pushlightfunction(L, create_dio_bsocket);
 	lua_call(L, 0, 0);
 
-	//Create self DIO msg, initialize as root
-	msg = dio_init(msg, "root");
+	//initialize DIO table
+	lua_pushlightfunction(L, dio_init_root);
+	lua_call(L, 0, 0);
 	
-	lua_pushlightfunction(L, libstorm_os_getnodeid);
-	lua_call(L, 0, 1);
-	msg->dodag_id=lua_tonumber(L, -1);
-	lua_pop(L); //remove node id from stack
-	
-	lua_pushlightuserdata(L, msg);
-	lua_setglobal(L, "DIOmsg");
-
-	//create and set global DIS msg
-	struct dis *dis_msg = malloc(sizeof(struct dis));
-	dis_msg->rank=1;
-	dis_msg->dodag_id= msg->dodag_id;
-	lua_pushlightuserdata(L, dis_msg);
-	lua_setglobal(L, "DISmsg");
+	//initialize DIS table
+	lua_pushlightfunction(L, dis_init_root);
+	lua_call(L, 0, 0);
 	
 	//set TFLAg to 0 to show that trickle timer is not currently running
 	lua_pushnumber(L, 0);
