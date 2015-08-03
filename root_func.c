@@ -1,3 +1,11 @@
+/* GLOBAL VALUES
+
+DIO
+
+
+
+*/
+
 #define RPL_SYMBOLS \
 	{ LSTRKEY("ground_func"), LFUNCVAL(rpl_ground_func)}, \
 #define disport 49152
@@ -5,18 +13,41 @@
 //DIO Message Fields
 struct dio
 {
-	uint8_t instance_id = 1; //8-bit instance id
 	uint16_t rank = 1; //16 bit rank
 	int grounded; //1 bit flag indicationg of node if grounded (1) or floating(0)
-	int mop; //2 bit flag indicating mode of operation (storing/ non-storing)
-	uint8_t dtsn;// 8 bit flag used to maintain downward routes
-	uint8_t reserved; // 8 bits reserved
 	uint16_t *dodag_id; //128 bit IPV6 address
 	uint8_t etx; //estimated hops left, 8 bit
-	const char *sip; //self ip address
 	uint16_t nid; //self node id
+	uint8_t version;
 };
 
+int dio_init_root(lua_State *L)
+{
+	lua_createtable(L, 0, 6);
+	int table_index=lua_gettop(L);
+	lua_pushstring(L, "rank");
+	lua_pushnumber(L, 1);
+	lua_settable(L, table_index);
+	lua_pushstring(L, "GF");
+	lua_pushnumber(L, 1);
+	lua_settable(L, table_index);
+	lua_pushstring(L, "dodag_id");
+	lua_pushnumber(L, 1); //find out how to assign
+	lua_settable(L, table_index);
+	lua_pushstring(L, "etx");
+	lua_pushnumber(L, 0);
+	lua_settable(L, table_index);
+	lua_pushstring(L, "node_id");
+	lua_pushlightfunction(L, libstorm_os_getnodeid);	
+	lua_call(L, 0, 1);
+	lua_settable(L, table_index);
+	lua_pushstring(L, "version");
+	lua_pushnumber(L, 0); 
+	lua_settable(L, table_index);
+	lua_pushvalue(L, table_index);
+	lua_setglobal(L, "DIO");
+	return 0;
+}
 //actions to perform upon receipt of dis	
 int dis_callback(lua_State *L)
 {
@@ -113,7 +144,6 @@ int ground_func(lua_State *L)
 	lua_call(L, 0, 0);
 
 	//Create self DIO msg, initialize as root
-	struct dio *msg = malloc(sizeof(struct dio));
 	msg = dio_init(msg, "root");
 	
 	lua_pushlightfunction(L, libstorm_os_getnodeid);
