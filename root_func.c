@@ -8,7 +8,7 @@ routing_table
 
 disport = 49152 (listens to DIS)
 dioport = 49153 (listend to DIO)
-
+disdioport = 49154 (multicasts DIS, received DIO unicast and broadcast)
 */
 
 /* TO DO
@@ -63,6 +63,8 @@ int dio_init_root(lua_State *L)
 	return 0;
 }
 
+
+
 int dis_init_root(lua_State *L)
 {
 	//DIS = {Rank, Node ID}
@@ -79,6 +81,156 @@ int dis_init_root(lua_State *L)
 	lua_setglobal(L, "DIS");
 	return 0;
 }
+
+int bcast_dio(lua_State *L)
+{
+	//libstorm_net_sendto(socket, payload, ip, port)
+	//multicast address: "ff02::1"
+	lua_pushlightfunction(L, libstorm_net_sendto);
+	lua_getglobal(L, "dio_sock");
+	lua_pushlightfunction(L, libstorm_mp_pack);
+	lua_getglobal(L, "DIO");
+	lua_call(L,1,1);
+	lua_pushstring(L, "ff02::1");
+	lua_pushnumber(L, dio_port);
+	lua_call(L, 4, 1);
+	return 0;
+}
+//args: i, inst
+//returns: 0 on oldinstance of trickle timer
+int i_timeout(lua_State *L)
+{
+	int t, imin, imax;
+	int i= lua_tonumber(L, lua_upvalueindex(1));
+	int l_inst= lua_tonumber(L, lua_upvalueindex(2)); //local instance number
+	
+	srand(time(NULL)); 
+	
+	//first check if the local trickle instance is same as global instance. if not- terminate
+	lua_getglobal(L, "TRICKLE_INSTANCE");
+	int g_inst = lua_tonumber(L, -1);
+	if(g_inst!= l_inst)
+	{
+		//new instance of trickle timer has been started, this one must be stopped
+		return 0;
+	}
+	else
+	{
+		//i timed out, double i
+		lua_getglobal(L, "IMIN");
+		imin = lua_tonumber(L, -1);
+		lua_getglobal(L, "IMAX");
+		imax = lua_tonumber(L, -1);
+		
+		if((2*i)<(imin*(2^imax)))
+		{
+			i*=2;
+		}	
+	
+		else
+		{
+			i = imin * (2^imax);
+		}
+		
+		//get new value of t
+		t = (rand() % ((i)-(i/2))) + (i/2) + 1;
+		
+		lua_pushnumber(L, t);
+		lua_pushnumber(L, i);
+		lua_pushnumber(L, l_inst); 
+		lua_set_continuation(L, t_timeout, 3);
+		
+		//call t_timeout after t ticks
+		return nc_invoke_sleep(L, (t) * SECOND_TICKS);
+	}
+}
+
+int t_timeout(lua_State *L)
+{
+	//function invoked after t ticks, time to check if c<k and transmit
+
+	int t= lua_tonumber(L, lua_upvalueindex(1));
+	int i= lua_tonumber(L, lua_upvalueindex(2));
+	int l_inst= lua_tonumber(L, lua_upvalueindex(3)); //local instance number
+	
+	
+	//first check if the current trickle instance is same as instance running
+	//global instance
+	lua_getglobal(L, "TRICKLE_INSTANCE");
+	int g_inst = lua_tonumber(L, -1);
+	if(g_inst!= l_inst)
+	{
+		//new instance of trickle timer has been started, this one must be stopped
+		return 0;
+	}
+	else
+	{
+		lua_getglobal(L, "C");
+		c=lua_tonumber(L, -1);
+		
+		if(c<k)
+		{
+			//transmit
+			lua_pushlightfunction(L, bcast_dio);
+			lua_call(L, 0, 0);
+		}
+	
+		
+		lua_pushnumber(L, i);
+		lua_pushnumber(L, l_inst); 
+		lua_set_continuation(L, i_timeout, 2);
+		
+		//call i_timeout after (i-t) ticks
+		return nc_invoke_sleep(L, (i-t) * SECOND_TICKS);
+	}
+}
+
+int trickle_timer(lua_State *L)
+{
+	int k, imin, imax,i,t;
+	
+	//initialize random number generator
+	srand(time(NULL)); 
+	
+	lua_getglobal(L, "IMIN");
+	imin = lua_tonumber(L, -1);
+	lua_getglobal(L, "IMAX");
+	imax = lua_tonumber(L, -1);
+	lua_getglobal(L, "K");
+	k = lua_tonumber(L, -1);
+	
+	//current interval size, random number between imin and imax
+ 	i = (rand() % ((imin* (2^imax))-imin)) + 1; 
+	
+	//counter	
+	int c=0; 
+	lua_pushnumber(L, c);
+	lua_setglobal(L, "C");
+	
+	// a time within the current interval, random number between (i/2) and i
+	t = (rand() % ((i)-(i/2))) + (i/2) + 1;
+	
+	//create t timeout flag
+	lua_pushnumber(L, 0);
+	lua_setglobal(L, "t_timeout_flag");
+
+	//create i timeout flag
+	lua_setglobal(L, "i_timeout_flag");
+
+	//socket for listening to data: eport 49154
+	//disdis_callback(): received DIO, changes the value of "c"
+
+	//start first interval 
+	//trickle_continuation(t, i, inst)->0 (keeps running)
+	
+	lua_pushnumber(L, t);
+	lua_pushnumber(L, i);
+	lua_getglobal(L, "TRICKLE_INSTANCE"); 
+	lua_set_continuation(L, t_timeout, 3);
+	return nc_invoke_sleep(L, t * SECOND_TICKS);
+	
+}
+
 //actions to perform upon receipt of dis	
 int dis_callback(lua_State *L)
 {
@@ -102,7 +254,10 @@ int dis_callback(lua_State *L)
 	int  rv=0; //return value from libstorm_net_sendto
 	
 	lua_getglobal(L, "neighbor_table"); 
+	
+	//EDIT line: Get nodeid from table
 	lua_pushnumber(L, payload->dodag_id);// push node id
+	
 	lua_pushstring(L, srcip);
 	lua_settable(L, -3);
 	lua_setglobal(L, "neighbor_table");
@@ -153,14 +308,37 @@ int dis_callback(lua_State *L)
 	      
 }
 
+//for DIO broadcast according to trickle timer
+int create_dio_bsocket(lua_State *L)
+{
+	lua_pushlightfunction(L, libstorm_net_udpsocket);
+	lua_pushnumber(dport);
+	lua_pushlightfunction(dio_callback);
+	lua_call(L,2,1);
+	lua_setglobal(L, "dio_sock");
+	return 0;
+}
+
+//create socket for receiving dis messages
 int create_dis_socket(lua_State *L)
 {
-	//create socket for receiving dis messages
+	
 	lua_pushlightfunction(L, libstorm_net_udpsocket);
 	lua_pushnumber(disport);
 	lua_pushlightfunction(dis_callback);
 	lua_call(L,2,1);
 	lua_setglobal(L, "dis_sock");
+	return 0;
+}
+
+//for multicasting DIS and receiving DIO unicast/broadcast
+int create_disdio_socket(lua_State *L)
+{
+	lua_pushlightfunction(L, libstorm_net_udpsocket);
+	lua_pushnumber(disdioport);
+	lua_pushlightfunction(disdio_callback);
+	lua_call(L,2,1);
+	lua_setglobal(L, "disdio_sock");
 	return 0;
 }
 
@@ -172,6 +350,10 @@ int ground_func(lua_State *L)
 	lua_call(L, 0, 0);
 
 	//socket for DIO bcast according to trickle timer
+	lua_pushlightfunction(L, create_dio_bsocket);
+	lua_call(L, 0, 0);
+	
+	//socket for multicasting DIS and receiving DIO unicast (for DODAG creation) and DIO bcast (according to trickle timer)
 	lua_pushlightfunction(L, create_dio_bsocket);
 	lua_call(L, 0, 0);
 
@@ -198,4 +380,71 @@ int ground_func(lua_State *L)
 	lua_newtable(L);
 	lua_setglobal(L, "routing_table");
 
+}
+
+//(Payload, srcip, srcport)
+//function called when dio msg received on eport
+//actions to perform upon receipt of dio
+
+int disdio_callback(lua_State *L)
+{
+	lua_pushlightfunction(L, libmsgpack_mp_unpack);
+	lua_pushvalue(L, 1);
+	lua_call(L, 1, 1);
+	int tab_index=lua_gettop(L); //DIO received
+	
+	char *srcip = lua_getstring(L, 2);
+	uint16_t srcport = lua_getnumber(L, 3);
+	
+	lua_getglobal(L, "C");
+	int c= lua_tonumber(L, -1);
+	
+	lua_getglobal(L, "DIO")
+	int self_dio= lua_gettop(L); 
+
+	//check if the node is floating or has a rank greater than new parent
+	//CHANGE FOLLOWING LINE TO GET VALUES FROM TABLE
+	if(*new.rank == -1 || *new.rank > (*msg.rank + 1))
+	{
+		//set preferred parent as incoming DIO, which is on top of the stack
+		lua_pushvalue(L, tab_index);
+		lua_setglobal(L, "PrefParent");
+
+		//Calculate rank and update grounded status
+		new = msg;
+		(*new).rank++; //increase rank
+		(*new).etx--; //decrease hop count
+		lua_pushlightuserdata(L, new);
+		lua_setglobal(L, "DIO");
+
+		//add to neighbor list
+		lua_getglobal(L, "neighbor_table");
+		lua_pushstring(L, srcip);
+		lua_pushnumber(srcport);
+		lua_settable(L, -3);
+		lua_setglobal(L, "neighbor_table");
+
+		if((*new).rank > ((*msg).rank+1))
+		{
+			//inconsistent state reached, reset everything and start trickle timer again
+			
+			//**STOP THE OLD INSTANCE OF TRICKLE TIMER**
+			lua_getglobal(L, "TRICKLE_INSTANCE");
+			int inst = lua_tonumber(L, -1);
+			inst++;
+			lua_pushnumber(L, inst);
+			lua_setglobal(L, "TRICKLE_INSTANCE");
+			
+			trickle_timer();
+		}
+		
+	}
+
+	else
+	{
+		//consistent state, increment C
+		c++;
+		lua_pushnumber(L, c);
+		lua_setglobal(L, "C");
+	}
 }
