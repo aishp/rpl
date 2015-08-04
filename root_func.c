@@ -6,11 +6,20 @@ TFLAG
 neighbor_table
 routing_table
 
+disport = 49152 (listens to DIS)
+dioport = 49153 (listend to DIO)
+
 */
 
+/* TO DO
+dio_ack: reset in dio_ack socket
+
+*/
 #define RPL_SYMBOLS \
 	{ LSTRKEY("ground_func"), LFUNCVAL(rpl_ground_func)}, \
-#define disport 49152
+	
+#define disport 49152 
+#define dioport 49153
 
 //DIO Message Fields
 struct dio
@@ -50,6 +59,7 @@ int dio_init_root(lua_State *L)
 	//following line might not be necessary:
 	//lua_pushvalue(L, table_index);
 	lua_setglobal(L, "DIO");
+	
 	return 0;
 }
 
@@ -72,7 +82,13 @@ int dis_init_root(lua_State *L)
 //actions to perform upon receipt of dis	
 int dis_callback(lua_State *L)
 {
-	struct dis *payload = lua_touserdata(L,1);
+	//get DIS msg from payload
+	lua_pushlightfunction(L, libmsgpack_mp_unpack);
+	lua_pushvalue(L, 1);
+	lua_call(L, 1, 1);
+	
+	int tab_index=lua_gettop(L);
+
 	char *srcip = lua_getstring(L, 2);
 	uint32_t srcport = lua_getnumber(L, 3);
 	
@@ -92,24 +108,19 @@ int dis_callback(lua_State *L)
 	lua_setglobal(L, "neighbor_table");
 
 //unicast back DIO
-	
-	lua_getglobal(L, "DIOmsg");
-  struct dio *msg = lua_touserdata(L, -1);
-  lua_pop(L);
-  
 	do
 	{
 		lua_pushlightfunction(L, libstorm_net_sendto);
-    //storm.net.sendto(socket, payload, address, destport) -> number
 		lua_getglobal(L, "dis_sock");
-		lua_getglobal(L, "DIOmsg");
+		lua_pushlightfunction(L, libstorm_mp_pack);
+		lua_getglobal(L, "DIO");
+		lua_call(L, 1, 1);
 		lua_pushstring(L, srcip);
-		lua_pushnumber(L, dio_port);
+		lua_pushnumber(L, disport);
 		lua_call(L,4,1);
-		rv= lua_checknumber(L, gettop(L));
-		
-	} while(rv!=1);
-
+		lua_getglobal(L, dio_ack); //by default set it to 1, change later
+	}while(lua_tonumber(L,-1)!=1);
+	
 	lua_getglobal(L, "TFLAG");
 	tflag = lua_checknumber(L, -1);
 	
@@ -176,6 +187,9 @@ int ground_func(lua_State *L)
 	lua_pushnumber(L, 0);
 	lua_setglobal(L, "TFLAG");
 
+	lua_pushnumber(L, 1);
+	lua_setglobal(L, dio_ack);
+	
 	//set empty neighbor table
 	lua_newtable(L);
 	lua_setglobal(L, "neighbor_table");
