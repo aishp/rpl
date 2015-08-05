@@ -231,6 +231,16 @@ int trickle_timer(lua_State *L)
 	
 }
 
+//actions to be performed upon receipt of msg on DIO bcast socket
+int diob_callback(lua_State *L)
+{
+	char *pay= (char *)lua_tostring(L, 1);
+	char *srcip=(char *)lua_tostring(L, 2);
+	uint32_t srcport = lua_tonumber(L, 3);
+	
+	printf("Received %s from %s on port %u\n", pay, srcip, srcport);
+	return 0;
+}
 //actions to perform upon receipt of dis	
 int dis_callback(lua_State *L)
 {
@@ -241,8 +251,8 @@ int dis_callback(lua_State *L)
 	
 	int tab_index=lua_gettop(L);
 
-	char *srcip = lua_getstring(L, 2);
-	uint32_t srcport = lua_getnumber(L, 3);
+	char *srcip = lua_tostring(L, 2);
+	uint32_t srcport = lua_tonumber(L, 3);
 	
 	//trickle timer parameters;
 	int imin = 5; 
@@ -354,7 +364,7 @@ int ground_func(lua_State *L)
 	lua_call(L, 0, 0);
 	
 	//socket for multicasting DIS and receiving DIO unicast (for DODAG creation) and DIO bcast (according to trickle timer)
-	lua_pushlightfunction(L, create_dio_bsocket);
+	lua_pushlightfunction(L, create_disdio_socket);
 	lua_call(L, 0, 0);
 
 	//initialize DIO table
@@ -392,39 +402,67 @@ int disdio_callback(lua_State *L)
 	lua_pushvalue(L, 1);
 	lua_call(L, 1, 1);
 	int tab_index=lua_gettop(L); //DIO received
-	
+	int s_rank, p_rank, //rank of self and incoming parent node
+	int nid; //node id of incoming DIO
+	lua_pushnil(L);
+	while (lua_next(L, -2))
+	{
+		const char* k= lua_tostring(L, -2);
+		if(strcmp(k, "rank")==0)
+		{
+			p_rank = lua_tonumber(L, -1));
+			break;
+		}
+		if(strcmp(k, "node_id")==0)
+		{
+			nid= lua_tonumber(L, -1);
+		}
+		lua_pop(L, 1);
+	}
 	char *srcip = lua_getstring(L, 2);
 	uint16_t srcport = lua_getnumber(L, 3);
 	
-	lua_getglobal(L, "C");
-	int c= lua_tonumber(L, -1);
+	
 	
 	lua_getglobal(L, "DIO")
 	int self_dio= lua_gettop(L); 
-
+	lua_pushnil(L);
+	while (lua_next(L, -2))
+	{
+		const char* k= lua_tostring(L, -2);
+		if(strcmp(k, "rank")==0)
+		{
+			s_rank = lua_tonumber(L, -1));
+		}
+		lua_pop(L, 1);
+	}
+	
 	//check if the node is floating or has a rank greater than new parent
-	//CHANGE FOLLOWING LINE TO GET VALUES FROM TABLE
-	if(*new.rank == -1 || *new.rank > (*msg.rank + 1))
+	if(s_rank == -1 || s_rank > (p_rank + 1))
 	{
 		//set preferred parent as incoming DIO, which is on top of the stack
 		lua_pushvalue(L, tab_index);
 		lua_setglobal(L, "PrefParent");
 
 		//Calculate rank and update grounded status
-		new = msg;
-		(*new).rank++; //increase rank
-		(*new).etx--; //decrease hop count
-		lua_pushlightuserdata(L, new);
+		lua_pushstring(L, "rank");
+		lua_pushnumber(L, p_rank+1);
+		lua_settable(L, self_dio);
+		
+		lua_pushstring(L, "GF"); 
+		lua_pushnumber(L, 1);
+		lua_settable(L, self_dio);
+		
 		lua_setglobal(L, "DIO");
-
+		
 		//add to neighbor list
 		lua_getglobal(L, "neighbor_table");
+		lua_pushnumber(L, nid);
 		lua_pushstring(L, srcip);
-		lua_pushnumber(srcport);
 		lua_settable(L, -3);
 		lua_setglobal(L, "neighbor_table");
 
-		if((*new).rank > ((*msg).rank+1))
+		if(s_rank != p_rank+1 )
 		{
 			//inconsistent state reached, reset everything and start trickle timer again
 			
@@ -443,8 +481,8 @@ int disdio_callback(lua_State *L)
 	else
 	{
 		//consistent state, increment C
-		c++;
-		lua_pushnumber(L, c);
+		lua_getglobal(L, "C");
+		lua_pushnumber(L, lua_tonumber(L, -1)+1);
 		lua_setglobal(L, "C");
 	}
 }
