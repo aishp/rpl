@@ -462,19 +462,14 @@ int disdio_callback(lua_State *L)
 		lua_settable(L, -3);
 		lua_setglobal(L, "neighbor_table");
 
-		if(s_rank != p_rank+1 )
-		{
-			//inconsistent state reached, reset everything and start trickle timer again
-			
-			//**STOP THE OLD INSTANCE OF TRICKLE TIMER**
-			lua_getglobal(L, "TRICKLE_INSTANCE");
-			int inst = lua_tonumber(L, -1);
-			inst++;
-			lua_pushnumber(L, inst);
-			lua_setglobal(L, "TRICKLE_INSTANCE");
-			
-			trickle_timer();
-		}
+	
+		//inconsistent state reached, reset everything and start trickle timer again
+		//**STOP THE OLD INSTANCE OF TRICKLE TIMER**
+		lua_getglobal(L, "TRICKLE_INSTANCE");
+		lua_pushnumber(L, lua_tonumber(L, -1)+1);
+		lua_setglobal(L, "TRICKLE_INSTANCE");
+		lua_pushlightfunction(L, trickle_timer);
+		lua_call(L, 0, 0);
 		
 	}
 
@@ -485,4 +480,6 @@ int disdio_callback(lua_State *L)
 		lua_pushnumber(L, lua_tonumber(L, -1)+1);
 		lua_setglobal(L, "C");
 	}
+	
+	return 0;
 }
