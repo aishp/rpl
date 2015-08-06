@@ -1,36 +1,42 @@
 /* GLOBAL VALUES
-
 DIO
 DIS
 TFLAG
 neighbor_table
 routing_table
+disport = 49152 (listens to DIS) - dis_callback
+dioport = 49153 (listens to DIO) - diob_callback
+disdioport = 49154 (multicasts DIS, received DIO unicast and broadcast) - disdio_callback
 
-disport = 49152 (listens to DIS)
-dioport = 49153 (listend to DIO)
-disdioport = 49154 (multicasts DIS, received DIO unicast and broadcast)
-*/
+DIO Message Fields
 
-/* TO DO
-dio_ack: reset in dio_ack socket
-
-*/
-#define RPL_SYMBOLS \
-	{ LSTRKEY("ground_func"), LFUNCVAL(rpl_ground_func)}, \
-	
-#define disport 49152 
-#define dioport 49153
-
-//DIO Message Fields
-struct dio
-{
 	uint16_t rank = 1; //16 bit rank
 	int grounded; //1 bit flag indicationg of node if grounded (1) or floating(0)
 	uint16_t *dodag_id; //128 bit IPV6 address
 	uint8_t etx; //estimated hops left, 8 bit
 	uint16_t nid; //self node id
 	uint8_t version;
-};
+
+*/
+
+/* TO DO
+dio_ack: reset in dio_ack socket
+*/
+
+
+#include<libmsgpack.c>
+#include<time.h>
+#include<stdlib.h>
+
+#define RPL_SYMBOLS \
+	{ LSTRKEY("ground_func"), LFUNCVAL(rpl_ground_func)}, \
+	
+#define disport 49152 
+#define dioport 49153
+#define disdioport 49154
+
+int disdio_callback(lua_State *L);
+int t_timeout(lua_State *L);
 
 int dio_init_root(lua_State *L)
 {
@@ -88,11 +94,11 @@ int bcast_dio(lua_State *L)
 	//multicast address: "ff02::1"
 	lua_pushlightfunction(L, libstorm_net_sendto);
 	lua_getglobal(L, "dio_sock");
-	lua_pushlightfunction(L, libstorm_mp_pack);
+	lua_pushlightfunction(L, libmsgpack_mp_pack);
 	lua_getglobal(L, "DIO");
 	lua_call(L,1,1);
 	lua_pushstring(L, "ff02::1");
-	lua_pushnumber(L, dio_port);
+	lua_pushnumber(L, dioport);
 	lua_call(L, 4, 1);
 	return 0;
 }
@@ -138,7 +144,7 @@ int i_timeout(lua_State *L)
 		lua_pushnumber(L, t);
 		lua_pushnumber(L, i);
 		lua_pushnumber(L, l_inst); 
-		lua_set_continuation(L, t_timeout, 3);
+		cord_set_continuation(L, t_timeout, 3);
 		
 		//call t_timeout after t ticks
 		return nc_invoke_sleep(L, (t) * SECOND_TICKS);
@@ -166,9 +172,8 @@ int t_timeout(lua_State *L)
 	else
 	{
 		lua_getglobal(L, "C");
-		c=lua_tonumber(L, -1);
-		
-		if(c<k)
+		lua_getglobal(L, "k");
+		if(lua_tonumber(L, -2)<lua_tonumber(L,-1)) //if(c<k)
 		{
 			//transmit
 			lua_pushlightfunction(L, bcast_dio);
@@ -178,7 +183,7 @@ int t_timeout(lua_State *L)
 		
 		lua_pushnumber(L, i);
 		lua_pushnumber(L, l_inst); 
-		lua_set_continuation(L, i_timeout, 2);
+		cord_set_continuation(L, i_timeout, 2);
 		
 		//call i_timeout after (i-t) ticks
 		return nc_invoke_sleep(L, (i-t) * SECOND_TICKS);
@@ -187,7 +192,7 @@ int t_timeout(lua_State *L)
 
 int trickle_timer(lua_State *L)
 {
-	int k, imin, imax,i,t;
+	int imin, imax,i,t;
 	
 	//initialize random number generator
 	srand(time(NULL)); 
@@ -196,8 +201,6 @@ int trickle_timer(lua_State *L)
 	imin = lua_tonumber(L, -1);
 	lua_getglobal(L, "IMAX");
 	imax = lua_tonumber(L, -1);
-	lua_getglobal(L, "K");
-	k = lua_tonumber(L, -1);
 	
 	//current interval size, random number between imin and imax
  	i = (rand() % ((imin* (2^imax))-imin)) + 1; 
@@ -226,7 +229,7 @@ int trickle_timer(lua_State *L)
 	lua_pushnumber(L, t);
 	lua_pushnumber(L, i);
 	lua_getglobal(L, "TRICKLE_INSTANCE"); 
-	lua_set_continuation(L, t_timeout, 3);
+	cord_set_continuation(L, t_timeout, 3);
 	return nc_invoke_sleep(L, t * SECOND_TICKS);
 	
 }
@@ -238,7 +241,7 @@ int diob_callback(lua_State *L)
 	char *srcip=(char *)lua_tostring(L, 2);
 	uint32_t srcport = lua_tonumber(L, 3);
 	
-	printf("Received %s from %s on port %u\n", pay, srcip, srcport);
+	printf("Received %s from %s on port %u\n", pay, srcip, (unsigned int)srcport);
 	return 0;
 }
 //actions to perform upon receipt of dis	
@@ -249,25 +252,28 @@ int dis_callback(lua_State *L)
 	lua_pushvalue(L, 1);
 	lua_call(L, 1, 1);
 	
-	int tab_index=lua_gettop(L);
-
-	char *srcip = lua_tostring(L, 2);
-	uint32_t srcport = lua_tonumber(L, 3);
+	char *srcip = (char *)lua_tostring(L, 2);
 	
 	//trickle timer parameters;
 	int imin = 5; 
 	int imax = 16; 
 	int k = 1; 
-	int tflag;
-	
-	
-	int  rv=0; //return value from libstorm_net_sendto
-	
+	int nid=0; //node id of incoming DIO
+	lua_pushnil(L);
+	while (lua_next(L, -2))
+	{
+		
+		if(strcmp((char *)lua_tostring(L,-2), "node_id")==0)
+		{
+			nid= lua_tonumber(L, -1);
+			break;
+		}
+		lua_pop(L, 1);
+	}
 	lua_getglobal(L, "neighbor_table"); 
 	
 	//EDIT line: Get nodeid from table
-	lua_pushnumber(L, payload->dodag_id);// push node id
-	
+	lua_pushnumber(L, nid);// push node id
 	lua_pushstring(L, srcip);
 	lua_settable(L, -3);
 	lua_setglobal(L, "neighbor_table");
@@ -277,19 +283,18 @@ int dis_callback(lua_State *L)
 	{
 		lua_pushlightfunction(L, libstorm_net_sendto);
 		lua_getglobal(L, "dis_sock");
-		lua_pushlightfunction(L, libstorm_mp_pack);
+		lua_pushlightfunction(L, libmsgpack_mp_pack);
 		lua_getglobal(L, "DIO");
 		lua_call(L, 1, 1);
 		lua_pushstring(L, srcip);
 		lua_pushnumber(L, disport);
 		lua_call(L,4,1);
-		lua_getglobal(L, dio_ack); //by default set it to 1, change later
+		lua_getglobal(L, "dio_ack"); //by default set it to 1, change later
 	}while(lua_tonumber(L,-1)!=1);
 	
 	lua_getglobal(L, "TFLAG");
-	tflag = lua_checknumber(L, -1);
 	
-	if(tflag==0)
+	if(lua_tonumber(L, -1)==0)
 	{
 		//minimum interval size in seconds
 		lua_pushnumber(L, imin);
@@ -305,7 +310,7 @@ int dis_callback(lua_State *L)
 		
 		//set TFLAG to show that trickle timer is now running
 		lua_pushnumber(L, 1);
-		lua_setlobal(L, "TFLAG");
+		lua_setglobal(L, "TFLAG");
 		
 		//set global trickle instance flag, to keep track whether we are running the right instance or an old instance
 		lua_pushnumber(L, 0);
@@ -315,6 +320,8 @@ int dis_callback(lua_State *L)
 		lua_pushlightfunction(L, trickle_timer);
 		lua_call(L, 0, 0);
 	}
+
+	return 0;
 	      
 }
 
@@ -322,8 +329,8 @@ int dis_callback(lua_State *L)
 int create_dio_bsocket(lua_State *L)
 {
 	lua_pushlightfunction(L, libstorm_net_udpsocket);
-	lua_pushnumber(dport);
-	lua_pushlightfunction(dio_callback);
+	lua_pushnumber(L, dioport);
+	lua_pushlightfunction(L, diob_callback);
 	lua_call(L,2,1);
 	lua_setglobal(L, "dio_sock");
 	return 0;
@@ -334,8 +341,8 @@ int create_dis_socket(lua_State *L)
 {
 	
 	lua_pushlightfunction(L, libstorm_net_udpsocket);
-	lua_pushnumber(disport);
-	lua_pushlightfunction(dis_callback);
+	lua_pushnumber(L, disport);
+	lua_pushlightfunction(L, dis_callback);
 	lua_call(L,2,1);
 	lua_setglobal(L, "dis_sock");
 	return 0;
@@ -345,15 +352,15 @@ int create_dis_socket(lua_State *L)
 int create_disdio_socket(lua_State *L)
 {
 	lua_pushlightfunction(L, libstorm_net_udpsocket);
-	lua_pushnumber(disdioport);
-	lua_pushlightfunction(disdio_callback);
+	lua_pushnumber(L, disdioport);
+	lua_pushlightfunction(L, disdio_callback);
 	lua_call(L,2,1);
 	lua_setglobal(L, "disdio_sock");
 	return 0;
 }
 
 //actions that take place in a root node
-int ground_func(lua_State *L)
+int rpl_ground_func(lua_State *L)
 {
 	//socket for listening to DIS and responding with DIO unicast
 	lua_pushlightfunction(L, create_dis_socket);
@@ -380,7 +387,7 @@ int ground_func(lua_State *L)
 	lua_setglobal(L, "TFLAG");
 
 	lua_pushnumber(L, 1);
-	lua_setglobal(L, dio_ack);
+	lua_setglobal(L, "dio_ack");
 	
 	//set empty neighbor table
 	lua_newtable(L);
@@ -389,6 +396,8 @@ int ground_func(lua_State *L)
 	//set empty routing table
 	lua_newtable(L);
 	lua_setglobal(L, "routing_table");
+
+	return 0;
 
 }
 
@@ -402,15 +411,15 @@ int disdio_callback(lua_State *L)
 	lua_pushvalue(L, 1);
 	lua_call(L, 1, 1);
 	int tab_index=lua_gettop(L); //DIO received
-	int s_rank, p_rank, //rank of self and incoming parent node
-	int nid; //node id of incoming DIO
+	int s_rank=-1, p_rank=-1; //rank of self and incoming parent node
+	int nid=0; //node id of incoming DIO
 	lua_pushnil(L);
 	while (lua_next(L, -2))
 	{
 		const char* k= lua_tostring(L, -2);
 		if(strcmp(k, "rank")==0)
 		{
-			p_rank = lua_tonumber(L, -1));
+			p_rank = lua_tonumber(L, -1);
 			break;
 		}
 		if(strcmp(k, "node_id")==0)
@@ -419,12 +428,8 @@ int disdio_callback(lua_State *L)
 		}
 		lua_pop(L, 1);
 	}
-	char *srcip = lua_getstring(L, 2);
-	uint16_t srcport = lua_getnumber(L, 3);
-	
-	
-	
-	lua_getglobal(L, "DIO")
+	char *srcip = (char *)lua_tostring(L, 2);
+	lua_getglobal(L, "DIO");
 	int self_dio= lua_gettop(L); 
 	lua_pushnil(L);
 	while (lua_next(L, -2))
@@ -432,7 +437,7 @@ int disdio_callback(lua_State *L)
 		const char* k= lua_tostring(L, -2);
 		if(strcmp(k, "rank")==0)
 		{
-			s_rank = lua_tonumber(L, -1));
+			s_rank = lua_tonumber(L, -1);
 		}
 		lua_pop(L, 1);
 	}
