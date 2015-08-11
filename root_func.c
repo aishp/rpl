@@ -242,6 +242,7 @@ int diob_callback(lua_State *L)
 	uint32_t srcport = lua_tonumber(L, 3);
 	
 	printf("Received %s from %s on port %u\n", pay, srcip, (unsigned int)srcport);
+	
 	return 0;
 }
 //actions to perform upon receipt of dis	
@@ -253,6 +254,11 @@ int dis_callback(lua_State *L)
 	lua_call(L, 1, 1);
 	
 	char *srcip = (char *)lua_tostring(L, 2);
+	/*
+	//close disdio socket
+	lua_pushlightfunction(L, libstorm_net_close);
+	lua_getglobal(L, disdio_sock);
+	lua_call(L, 1, 0);*/
 	
 	//trickle timer parameters;
 	int imin = 5; 
@@ -316,6 +322,10 @@ int dis_callback(lua_State *L)
 		lua_pushnumber(L, 0);
 		lua_setglobal(L, "TRICKLE_INSTANCE"); 
 		
+		//socket for DIO bcast according to trickle timer
+		lua_pushlightfunction(L, create_dio_bsocket);
+		lua_call(L, 0, 0);
+		
 		//call the trickle timer, let it run concurrently in the background
 		lua_pushlightfunction(L, trickle_timer);
 		lua_call(L, 0, 0);
@@ -348,16 +358,30 @@ int create_dis_socket(lua_State *L)
 	return 0;
 }
 
-//for multicasting DIS and receiving DIO unicast/broadcast
-int create_disdio_socket(lua_State *L)
+//for multicasting DIS 
+int create_dismcast_socket(lua_State *L)
 {
 	lua_pushlightfunction(L, libstorm_net_udpsocket);
 	lua_pushnumber(L, disdioport);
-	lua_pushlightfunction(L, disdio_callback);
+	lua_pushlightfunction(L, dismcast_callback);
 	lua_call(L,2,1);
-	lua_setglobal(L, "disdio_sock");
+	lua_setglobal(L, "dismcast_sock");
 	return 0;
 }
+
+
+//for receiving DIO broadcast 
+int create_diobrecv_socket(lua_State *L)
+{
+	lua_pushlightfunction(L, libstorm_net_udpsocket);
+	lua_pushnumber(L, disdioport);
+	lua_pushlightfunction(L, diobrecv_callback);
+	lua_call(L,2,1);
+	lua_setglobal(L, "diobrecv_sock");
+	return 0;
+}
+
+
 
 //actions that take place in a root node
 int rpl_ground_func(lua_State *L)
@@ -398,6 +422,24 @@ int rpl_ground_func(lua_State *L)
 	lua_setglobal(L, "routing_table");
 
 	return 0;
+
+}
+
+int rpl_float_func(lua_State *L)
+{
+	//socket for listening to DIS and responding with DIO unicast
+	lua_pushlightfunction(L, create_dis_socket);
+	lua_call(L, 0, 0);
+
+	
+	
+	//socket for multicasting DIS and receiving DIO unicast (for DODAG creation) and DIO bcast (according to trickle timer)
+	lua_pushlightfunction(L, create_disdio_socket);
+	lua_call(L, 0, 0);
+	
+	//if it receives a DIS or DIO, close disdio socket
+	
+
 
 }
 
