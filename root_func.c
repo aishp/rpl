@@ -1,12 +1,18 @@
 /* GLOBAL VALUES
+
 DIO
 DIS
 TFLAG
-neighbor_table
+dismflag: 1 if DIS is still being multicast, 0 if dismcast_socket has been closed
+
+parent_table
 routing_table
-disport = 49152 (listens to DIS) - dis_callback
-dioport = 49153 (listens to DIO) - diob_callback
-disdioport = 49154 (multicasts DIS, received DIO unicast and broadcast) - disdio_callback
+
+disrecvport = 49152 (listens to DIS) - disrecv_callback
+diorecvport = 49153 (listens to DIO) - diorecv_callback
+dismcastport = 49154 (multicasts DIS) - dismcast_callback
+diobcastport = 49155 (Broadcasts DIO) - diobcast_callback
+
 
 DIO Message Fields
 
@@ -30,18 +36,20 @@ dio_ack: reset in dio_ack socket
 
 #define RPL_SYMBOLS \
 	{ LSTRKEY("ground_func"), LFUNCVAL(rpl_ground_func)}, \
+	{ LSTRKEY("float_func"), LFUNCVAL(rpl_float_func)}, \
 	
-#define disport 49152 
-#define dioport 49153
-#define disdioport 49154
+#define disrecvport 49152 
+#define diorecvport 49153
+#define dismcastport 49154
+#define diobcastport 49155
 
-int disdio_callback(lua_State *L);
+int dismcast_callback(lua_State *L);
 int t_timeout(lua_State *L);
 
 int dio_init_root(lua_State *L)
 {
 	//DIO = { Rank, G/F, Dodag ID, ETX, Node ID, Version }
-	lua_createtable(L, 0, 6);
+	lua_getglobal(L, "DIO");
 	int table_index=lua_gettop(L);
 	lua_pushstring(L, "rank");
 	lua_pushnumber(L, 1);
@@ -69,21 +77,64 @@ int dio_init_root(lua_State *L)
 	return 0;
 }
 
+//(rank, gf, dodag_id, etx, version)->nil
+int dio_init(lua_State *L)
+{
+	//DIO = { Rank, G/F, Dodag ID, ETX, Node ID, Version }
+	
+	lua_getglobal(L, "DIO");
+	int table_index=lua_gettop(L);
 
+	lua_pushstring(L, "rank");
+	lua_pushvalue(L, lua_tonumber(L, 1)+1); //parent rank is the first parameter
+	lua_settable(L, table_index);
 
-int dis_init_root(lua_State *L)
+	lua_pushstring(L, "GF");
+	lua_tonumber(L, 2);
+	lua_settable(L, table_index);
+
+	lua_pushstring(L, "dodag_id");
+	lua_pushvalue(L, 3);
+	lua_settable(L, table_index);
+
+	lua_pushstring(L, "etx"); //same as rank?
+	lua_pushvalue(L, 4);
+	lua_settable(L, table_index);
+
+	lua_pushstring(L, "node_id");
+	lua_pushlightfunction(L, libstorm_os_getnodeid);	
+	lua_call(L, 0, 1);
+	lua_settable(L, table_index);
+
+	lua_pushstring(L, "version");
+	lua_pushvalue(L, 5); 
+	lua_settable(L, table_index);
+
+	//following line might not be necessary:
+	//lua_pushvalue(L, table_index);
+
+	lua_setglobal(L, "DIO");
+	
+	return 0;
+}
+
+//(Rank)-> NIL
+int dis_init(lua_State *L)
 {
 	//DIS = {Rank, Node ID}
 
 	lua_createtable(L, 0, 2);
 	int table_index=lua_gettop(L);
+
 	lua_pushstring(L, "rank");
-	lua_pushnumber(L, 1);
+	lua_pushvalue(L, 1);
 	lua_settable(L, table_index);
+
 	lua_pushstring(L, "node_id");
 	lua_pushlightfunction(L, libstorm_os_getnodeid);	
 	lua_call(L, 0, 1);
 	lua_settable(L, table_index);
+
 	lua_setglobal(L, "DIS");
 	return 0;
 }
@@ -93,12 +144,27 @@ int bcast_dio(lua_State *L)
 	//libstorm_net_sendto(socket, payload, ip, port)
 	//multicast address: "ff02::1"
 	lua_pushlightfunction(L, libstorm_net_sendto);
-	lua_getglobal(L, "dio_sock");
+	lua_getglobal(L, "diobcast_sock");
 	lua_pushlightfunction(L, libmsgpack_mp_pack);
 	lua_getglobal(L, "DIO");
 	lua_call(L,1,1);
 	lua_pushstring(L, "ff02::1");
-	lua_pushnumber(L, dioport);
+	lua_pushnumber(L, diorecvport);
+	lua_call(L, 4, 1);
+	return 0;
+}
+
+int mcast_dis(lua_State *L)
+{
+	//libstorm_net_sendto(socket, payload, ip, port)
+	//multicast address: "ff02::1"
+	lua_pushlightfunction(L, libstorm_net_sendto);
+	lua_getglobal(L, "dismcast_sock");
+	lua_pushlightfunction(L, libmsgpack_mp_pack);
+	lua_getglobal(L, "DIS");
+	lua_call(L,1,1);
+	lua_pushstring(L, "ff02::1");
+	lua_pushnumber(L, dismcastport);
 	lua_call(L, 4, 1);
 	return 0;
 }
@@ -235,18 +301,31 @@ int trickle_timer(lua_State *L)
 }
 
 //actions to be performed upon receipt of msg on DIO bcast socket
-int diob_callback(lua_State *L)
+int diobcast_callback(lua_State *L)
 {
 	char *pay= (char *)lua_tostring(L, 1);
 	char *srcip=(char *)lua_tostring(L, 2);
 	uint32_t srcport = lua_tonumber(L, 3);
 	
-	printf("Received %s from %s on port %u\n", pay, srcip, (unsigned int)srcport);
+	printf("Received %s from %s on port %u (DIS mcast)\n", pay, srcip, (unsigned int)srcport);
 	
 	return 0;
 }
+
+//actions to be performed upon receipt of msg on DIS mcast socket
+int dismcast_callback(lua_State *L)
+{
+	char *pay= (char *)lua_tostring(L, 1);
+	char *srcip=(char *)lua_tostring(L, 2);
+	uint32_t srcport = lua_tonumber(L, 3);
+	
+	printf("Received %s from %s on port %u (DIS mcast)\n", pay, srcip, (unsigned int)srcport);
+	
+	return 0;
+}
+
 //actions to perform upon receipt of dis	
-int dis_callback(lua_State *L)
+int disrecv_callback(lua_State *L)
 {
 	//get DIS msg from payload
 	lua_pushlightfunction(L, libmsgpack_mp_unpack);
@@ -254,11 +333,18 @@ int dis_callback(lua_State *L)
 	lua_call(L, 1, 1);
 	
 	char *srcip = (char *)lua_tostring(L, 2);
-	/*
-	//close disdio socket
-	lua_pushlightfunction(L, libstorm_net_close);
-	lua_getglobal(L, disdio_sock);
-	lua_call(L, 1, 0);*/
+	
+	//close dismcast socket
+	lua_getglobal(L, "dismflag"); //flag that checks if dis is still being multicast
+	if(lua_tonumber(L, -1)==1)
+	{
+		lua_pushlightfunction(L, libstorm_net_close);
+		lua_getglobal(L, dismcast_sock);
+		lua_call(L, 1, 0);
+		lua_pushnumber(L, 0);
+		lua_setglobal(L, "dismflag");
+	}
+
 	
 	//trickle timer parameters;
 	int imin = 5; 
@@ -276,13 +362,13 @@ int dis_callback(lua_State *L)
 		}
 		lua_pop(L, 1);
 	}
-	lua_getglobal(L, "neighbor_table"); 
+	lua_getglobal(L, "parent_table"); 
 	
 	//EDIT line: Get nodeid from table
 	lua_pushnumber(L, nid);// push node id
 	lua_pushstring(L, srcip);
 	lua_settable(L, -3);
-	lua_setglobal(L, "neighbor_table");
+	lua_setglobal(L, "parent_table");
 
 //unicast back DIO
 	do
@@ -336,7 +422,7 @@ int dis_callback(lua_State *L)
 }
 
 //for DIO broadcast according to trickle timer
-int create_dio_bsocket(lua_State *L)
+int create_diobcast_socket(lua_State *L)
 {
 	lua_pushlightfunction(L, libstorm_net_udpsocket);
 	lua_pushnumber(L, dioport);
@@ -347,14 +433,14 @@ int create_dio_bsocket(lua_State *L)
 }
 
 //create socket for receiving dis messages
-int create_dis_socket(lua_State *L)
+int create_disrecv_socket(lua_State *L)
 {
 	
 	lua_pushlightfunction(L, libstorm_net_udpsocket);
-	lua_pushnumber(L, disport);
-	lua_pushlightfunction(L, dis_callback);
+	lua_pushnumber(L, disrecvport);
+	lua_pushlightfunction(L, disrecv_callback);
 	lua_call(L,2,1);
-	lua_setglobal(L, "dis_sock");
+	lua_setglobal(L, "disrecv_sock");
 	return 0;
 }
 
@@ -362,7 +448,7 @@ int create_dis_socket(lua_State *L)
 int create_dismcast_socket(lua_State *L)
 {
 	lua_pushlightfunction(L, libstorm_net_udpsocket);
-	lua_pushnumber(L, disdioport);
+	lua_pushnumber(L, dismcastport);
 	lua_pushlightfunction(L, dismcast_callback);
 	lua_call(L,2,1);
 	lua_setglobal(L, "dismcast_sock");
@@ -371,13 +457,13 @@ int create_dismcast_socket(lua_State *L)
 
 
 //for receiving DIO broadcast 
-int create_diobrecv_socket(lua_State *L)
+int create_diorecv_socket(lua_State *L)
 {
 	lua_pushlightfunction(L, libstorm_net_udpsocket);
-	lua_pushnumber(L, disdioport);
-	lua_pushlightfunction(L, diobrecv_callback);
+	lua_pushnumber(L, diorecvport);
+	lua_pushlightfunction(L, diorecv_callback);
 	lua_call(L,2,1);
-	lua_setglobal(L, "diobrecv_sock");
+	lua_setglobal(L, "diorecv_sock");
 	return 0;
 }
 
@@ -387,11 +473,11 @@ int create_diobrecv_socket(lua_State *L)
 int rpl_ground_func(lua_State *L)
 {
 	//socket for listening to DIS and responding with DIO unicast
-	lua_pushlightfunction(L, create_dis_socket);
+	lua_pushlightfunction(L, create_disrecv_socket);
 	lua_call(L, 0, 0);
 
 	//socket for DIO bcast according to trickle timer
-	lua_pushlightfunction(L, create_dio_bsocket);
+	lua_pushlightfunction(L, create_diobcast_bsocket);
 	lua_call(L, 0, 0);
 	
 	//socket for multicasting DIS and receiving DIO unicast (for DODAG creation) and DIO bcast (according to trickle timer)
@@ -399,23 +485,31 @@ int rpl_ground_func(lua_State *L)
 	lua_call(L, 0, 0);
 
 	//initialize DIO table
-	lua_pushlightfunction(L, dio_init_root);
-	lua_call(L, 0, 0);
-	
+	lua_pushlightfunction(L, dio_init);
+	lua_pushnumber(L, 1); //rank of root
+	lua_pushnumber(L, 1); //root is grounded
+	lua_pushlightfunction(L, libstorm_os_getnodeid);
+	lua_call(L, 0, 1);//dodag id is same as node id for root
+	lua_pushnumber(L, 0); //etx is 0, directly connected to border router
+	lua_pushnumber(L, 1);//version 1
+	lua_call(L, 5, 0); 
+
 	//initialize DIS table
-	lua_pushlightfunction(L, dis_init_root);
+	lua_pushlightfunction(L, dis_init);
+	lua_pushnumber(L, 1); //rank of root
 	lua_call(L, 0, 0);
 	
 	//set TFLAg to 0 to show that trickle timer is not currently running
 	lua_pushnumber(L, 0);
 	lua_setglobal(L, "TFLAG");
 
+	//set dio_ack to 1 for now
 	lua_pushnumber(L, 1);
 	lua_setglobal(L, "dio_ack");
 	
-	//set empty neighbor table
+	//set empty parent table
 	lua_newtable(L);
-	lua_setglobal(L, "neighbor_table");
+	lua_setglobal(L, "parent_table");
 	
 	//set empty routing table
 	lua_newtable(L);
@@ -425,91 +519,155 @@ int rpl_ground_func(lua_State *L)
 
 }
 
+
+int mcast_dio(lua_State *L)
+{
+	lua_pushlightfunction(L, libstorm_net_sendto);
+	lua_getglobal(L, "dismcast_sock");
+	lua_pushlightfunction(L, libmsgpack_mp_pack);
+	lua_getglobal(L, "DIS");
+	lua_call(L,1,1);
+	lua_pushstring(L, "ff02::1");
+	lua_pushnumber(L, disrecvport);
+	lua_call(L, 4, 1);
+	
+	lua_getglobal(L, "dismflag");
+	if(lua_tonumber(L, -1)==1)
+	{
+
+		cord_set_continuation(L, mcast_dis, 0);
+		return nc_invoke_sleep(L, 5 * SECOND_TICKS); //can be changed
+	}
+
+	else
+	{
+		return 0;
+	}
+
+}
+
 int rpl_float_func(lua_State *L)
 {
 	//socket for listening to DIS and responding with DIO unicast
-	lua_pushlightfunction(L, create_dis_socket);
+	lua_pushlightfunction(L, create_disrecv_socket);
 	lua_call(L, 0, 0);
 
-	
-	
-	//socket for multicasting DIS and receiving DIO unicast (for DODAG creation) and DIO bcast (according to trickle timer)
-	lua_pushlightfunction(L, create_disdio_socket);
+	//socket for multicasting DIS 
+	lua_pushlightfunction(L, create_dismcast_socket);
 	lua_call(L, 0, 0);
 	
-	//if it receives a DIS or DIO, close disdio socket
+	//socket for receiving DIO unicast/ broadcast
+	lua_pushlightfunction(L, create_diorecv_socket);
+	lua_call(L, 0, 0);
+
+	//socket for broadcasting DIO
+	lua_pushlightfunction(L, create_diobcast_socket);
+	lua_call(L, 0, 0);
+
+	//initialize DIO table
+	lua_createtable(L, 0, 6);
+	lua_setglobal(L, "DIO");
+	lua_pushlightfunction(L, dio_init);
+	lua_pushnumber(L, -1); //rank of floating node
+	lua_pushnumber(L, 0); //floating
+	lua_pushnumber(L, -1); //not associated to any dodag, so dodag_id is -1
+	lua_pushnumber(L, 10000); //infinite
+	lua_pushnumber(L, -1);//no version yet since node is floating
+	lua_call(L, 5, 0); 
+
+	//initialize DIS table
+	lua_pushlightfunction(L, dis_init);
+	lua_pushnumber(L, -1); //rank of floating node
+	lua_call(L, 0, 0);
+
+	//set flag to show that DIS is being multicast
+	lua_pushnumber(L, 1);
+	lua_setglobal(L, "dismflag");
+
+	//start DIS multicast
+	lua_pushlightfunction(L, dis_mcast);
+	lua_call(L, 0, 0);
+
+	//set TFLAg to 0 to show that trickle timer is not currently running
+	lua_pushnumber(L, 0);
+	lua_setglobal(L, "TFLAG");
+
+	//set dio_ack to 1 for now
+	lua_pushnumber(L, 1);
+	lua_setglobal(L, "dio_ack");
 	
+	//set empty parent table
+	lua_newtable(L);
+	lua_setglobal(L, "parent_table");
+	
+	//set empty routing table
+	lua_newtable(L);
+	lua_setglobal(L, "routing_table");
 
-
+	return 0;
 }
 
 //(Payload, srcip, srcport)
 //function called when dio msg received on eport
 //actions to perform upon receipt of dio
 
-int disdio_callback(lua_State *L)
+int diorecv_callback(lua_State *L)
 {
 	lua_pushlightfunction(L, libmsgpack_mp_unpack);
 	lua_pushvalue(L, 1);
 	lua_call(L, 1, 1);
 	int tab_index=lua_gettop(L); //DIO received
-	int s_rank=-1, p_rank=-1; //rank of self and incoming parent node
-	int nid=0; //node id of incoming DIO
-	lua_pushnil(L);
-	while (lua_next(L, -2))
-	{
-		const char* k= lua_tostring(L, -2);
-		if(strcmp(k, "rank")==0)
-		{
-			p_rank = lua_tonumber(L, -1);
-			break;
-		}
-		if(strcmp(k, "node_id")==0)
-		{
-			nid= lua_tonumber(L, -1);
-		}
-		lua_pop(L, 1);
-	}
 	char *srcip = (char *)lua_tostring(L, 2);
-	lua_getglobal(L, "DIO");
-	int self_dio= lua_gettop(L); 
-	lua_pushnil(L);
-	while (lua_next(L, -2))
+	
+	//close dismcast socket
+	lua_getglobal(L, "dismflag"); //flag that checks if dis is still being multicast
+	if(lua_tonumber(L, -1)==1)
 	{
-		const char* k= lua_tostring(L, -2);
-		if(strcmp(k, "rank")==0)
-		{
-			s_rank = lua_tonumber(L, -1);
-		}
-		lua_pop(L, 1);
+		lua_pushlightfunction(L, libstorm_net_close);
+		lua_getglobal(L, dismcast_sock);
+		lua_call(L, 1, 0);
+		lua_pushnumber(L, 0);
+		lua_setglobal(L, "dismflag");
 	}
 	
-	//check if the node is floating or has a rank greater than new parent
-	if(s_rank == -1 || s_rank > (p_rank + 1))
+	lua_getglobal(L, "DIO");
+	int self_dio= lua_gettop(L); 
+	
+	lua_pushstring(L, "rank");
+	lua_gettable(L, self_dio);
+	lua_pushstring(L, "rank");
+	lua_gettable(L, tab_index);
+
+	if(lua_tonumber(L, -2)==-1 || lua_tonumber(L, -2) > (lua_tonumber(L, -1)+1))
 	{
+
 		//set preferred parent as incoming DIO, which is on top of the stack
 		lua_pushvalue(L, tab_index);
 		lua_setglobal(L, "PrefParent");
-
-		//Calculate rank and update grounded status
+		
+		//Update self dio with new rank, gf, dodag_id, etx and version (from parent)
+		lua_pushlightfunction(L, dio_init);
 		lua_pushstring(L, "rank");
-		lua_pushnumber(L, p_rank+1);
-		lua_settable(L, self_dio);
+		lua_pushnumber(L, lua_tonumber(L, -1)+1);//push new rank
+		lua_pushnumber(L, 1);//GF=1
+		lua_pushstring(L, "dodag_id");
+		lua_gettable(L, tab_index);//same dodag_id as parent
+		lua_pushstring(L, "etx");
+		lua_gettable(L, tab_index);
+		int etx=lua_tonumber(L, -1);
+		lua_pop(L, 1);
+		lua_pushnumber(L,etx+1);//etx of parent+1 (for now,later add another measure for calculating etx)
+		lua_pushstring(L, "version");
+		lua_gettable(L, tab_index);//same dodag_version as parent
+		lua_call(L, 5, 0);
 		
-		lua_pushstring(L, "GF"); 
-		lua_pushnumber(L, 1);
-		lua_settable(L, self_dio);
-		
-		lua_setglobal(L, "DIO");
-		
-		//add to neighbor list
-		lua_getglobal(L, "neighbor_table");
+		//add to parent list
+		lua_getglobal(L, "parent_table");
 		lua_pushnumber(L, nid);
 		lua_pushstring(L, srcip);
 		lua_settable(L, -3);
-		lua_setglobal(L, "neighbor_table");
+		lua_setglobal(L, "parent_table");
 
-	
 		//inconsistent state reached, reset everything and start trickle timer again
 		//**STOP THE OLD INSTANCE OF TRICKLE TIMER**
 		lua_getglobal(L, "TRICKLE_INSTANCE");
@@ -522,7 +680,7 @@ int disdio_callback(lua_State *L)
 
 	else
 	{
-		//consistent state, increment C
+		//consistent state, increment C(trickle timer counter)
 		lua_getglobal(L, "C");
 		lua_pushnumber(L, lua_tonumber(L, -1)+1);
 		lua_setglobal(L, "C");
