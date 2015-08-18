@@ -13,6 +13,17 @@ diorecvport = 49153 (listens to DIO) - diorecv_callback
 dismcastport = 49154 (multicasts DIS) - dismcast_callback
 diobcastport = 49155 (Broadcasts DIO) - diobcast_callback
 
+disrecv_sock
+dismcast_sock
+diobcast_sock
+diorecv_sock
+
+rpl_float_func()
+mcast_dis()
+bcast_dis()
+trickle_timer()
+dio_init()
+dis_init()
 
 DIO Message Fields
 
@@ -328,13 +339,34 @@ int dismcast_callback(lua_State *L)
 int disrecv_callback(lua_State *L)
 {
 	//get DIS msg from payload
+	
+
+	char *srcip = (char *)lua_tostring(L, 2);
+	
+	lua_getglobal(L, "neighbor_table");
+	int nt_index=lua_gettop(L);
+	
 	lua_pushlightfunction(L, libmsgpack_mp_unpack);
 	lua_pushvalue(L, 1);
 	lua_call(L, 1, 1);
 	
-	char *srcip = (char *)lua_tostring(L, 2);
+	lua_pushstring(L, "nodeid");
+	lua_gettable(L, -2);
 	
-	//close dismcast socket
+	lua_pushstring(L, srcip);
+	lua_settable(L, nt_index);
+	lua_pushvalue(L, nt_index);
+	lua_setglobal(L, "neighbor_table");
+	
+	lua_getglobal(L, "DIO");
+	lua_pushstring(L, "grounded");
+	lua_gettable(L, -2);
+	if(lua_tonumber(L, -1)==0)
+	{
+		return 0;
+	}
+	
+	//stop DIS multicast
 	lua_getglobal(L, "dismflag"); //flag that checks if dis is still being multicast
 	if(lua_tonumber(L, -1)==1)
 	{
@@ -345,12 +377,14 @@ int disrecv_callback(lua_State *L)
 		lua_setglobal(L, "dismflag");
 	}
 
-	
-	//trickle timer parameters;
+
+	//trickle timer parameters
 	int imin = 5; 
 	int imax = 16; 
 	int k = 1; 
 	int nid=0; //node id of incoming DIO
+	
+	
 	lua_pushnil(L);
 	while (lua_next(L, -2))
 	{
@@ -428,7 +462,7 @@ int create_diobcast_socket(lua_State *L)
 	lua_pushnumber(L, dioport);
 	lua_pushlightfunction(L, diob_callback);
 	lua_call(L,2,1);
-	lua_setglobal(L, "dio_sock");
+	lua_setglobal(L, "diobcast_sock");
 	return 0;
 }
 
@@ -520,7 +554,7 @@ int rpl_ground_func(lua_State *L)
 }
 
 
-int mcast_dio(lua_State *L)
+int mcast_dis(lua_State *L)
 {
 	lua_pushlightfunction(L, libstorm_net_sendto);
 	lua_getglobal(L, "dismcast_sock");
@@ -546,66 +580,7 @@ int mcast_dio(lua_State *L)
 
 }
 
-int rpl_float_func(lua_State *L)
-{
-	//socket for listening to DIS and responding with DIO unicast
-	lua_pushlightfunction(L, create_disrecv_socket);
-	lua_call(L, 0, 0);
 
-	//socket for multicasting DIS 
-	lua_pushlightfunction(L, create_dismcast_socket);
-	lua_call(L, 0, 0);
-	
-	//socket for receiving DIO unicast/ broadcast
-	lua_pushlightfunction(L, create_diorecv_socket);
-	lua_call(L, 0, 0);
-
-	//socket for broadcasting DIO
-	lua_pushlightfunction(L, create_diobcast_socket);
-	lua_call(L, 0, 0);
-
-	//initialize DIO table
-	lua_createtable(L, 0, 6);
-	lua_setglobal(L, "DIO");
-	lua_pushlightfunction(L, dio_init);
-	lua_pushnumber(L, -1); //rank of floating node
-	lua_pushnumber(L, 0); //floating
-	lua_pushnumber(L, -1); //not associated to any dodag, so dodag_id is -1
-	lua_pushnumber(L, 10000); //infinite
-	lua_pushnumber(L, -1);//no version yet since node is floating
-	lua_call(L, 5, 0); 
-
-	//initialize DIS table
-	lua_pushlightfunction(L, dis_init);
-	lua_pushnumber(L, -1); //rank of floating node
-	lua_call(L, 0, 0);
-
-	//set flag to show that DIS is being multicast
-	lua_pushnumber(L, 1);
-	lua_setglobal(L, "dismflag");
-
-	//start DIS multicast
-	lua_pushlightfunction(L, dis_mcast);
-	lua_call(L, 0, 0);
-
-	//set TFLAg to 0 to show that trickle timer is not currently running
-	lua_pushnumber(L, 0);
-	lua_setglobal(L, "TFLAG");
-
-	//set dio_ack to 1 for now
-	lua_pushnumber(L, 1);
-	lua_setglobal(L, "dio_ack");
-	
-	//set empty parent table
-	lua_newtable(L);
-	lua_setglobal(L, "parent_table");
-	
-	//set empty routing table
-	lua_newtable(L);
-	lua_setglobal(L, "routing_table");
-
-	return 0;
-}
 
 //(Payload, srcip, srcport)
 //function called when dio msg received on eport
@@ -686,5 +661,66 @@ int diorecv_callback(lua_State *L)
 		lua_setglobal(L, "C");
 	}
 	
+	return 0;
+}
+
+int rpl_float_func(lua_State *L)
+{
+	//socket for listening to DIS and responding with DIO unicast
+	lua_pushlightfunction(L, create_disrecv_socket);
+	lua_call(L, 0, 0);
+
+	//socket for multicasting DIS 
+	lua_pushlightfunction(L, create_dismcast_socket);
+	lua_call(L, 0, 0);
+	
+	//socket for receiving DIO unicast/ broadcast
+	lua_pushlightfunction(L, create_diorecv_socket);
+	lua_call(L, 0, 0);
+
+	//socket for broadcasting DIO
+	lua_pushlightfunction(L, create_diobcast_socket);
+	lua_call(L, 0, 0);
+
+	//initialize DIO table
+	lua_createtable(L, 0, 6);
+	lua_setglobal(L, "DIO");
+	lua_pushlightfunction(L, dio_init);
+	lua_pushnumber(L, -1); //rank of floating node
+	lua_pushnumber(L, 0); //floating
+	lua_pushnumber(L, -1); //not associated to any dodag, so dodag_id is -1
+	lua_pushnumber(L, 10000); //infinite etx
+	lua_pushnumber(L, -1);//no version yet since node is floating
+	lua_call(L, 5, 0); 
+
+	//initialize DIS table
+	lua_pushlightfunction(L, dis_init);
+	lua_pushnumber(L, -1); //rank of floating node
+	lua_call(L, 0, 0);
+
+	//set flag to show that DIS is being multicast
+	lua_pushnumber(L, 1);
+	lua_setglobal(L, "dismflag");
+
+	//start DIS multicast
+	lua_pushlightfunction(L, mcast_dis);
+	lua_call(L, 0, 0);
+
+	//set TFLAg to 0 to show that trickle timer is not currently running
+	lua_pushnumber(L, 0);
+	lua_setglobal(L, "TFLAG");
+
+	//set dio_ack to 1 for now
+	lua_pushnumber(L, 1);
+	lua_setglobal(L, "dio_ack");
+	
+	//set empty parent table
+	lua_newtable(L);
+	lua_setglobal(L, "parent_table");
+	
+	//set empty routing table
+	lua_newtable(L);
+	lua_setglobal(L, "routing_table");
+
 	return 0;
 }
