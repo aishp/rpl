@@ -1,47 +1,38 @@
 /* GLOBAL VALUES
-
 DIO
 DIS
 TFLAG
 dismflag: 1 if DIS is still being multicast, 0 if dismcast_socket has been closed
-
 parent_table
 routing_table
-
 disrecvport = 49152 (listens to DIS) - disrecv_callback
 diorecvport = 49153 (listens to DIO) - diorecv_callback
 dismcastport = 49154 (multicasts DIS) - dismcast_callback
 diobcastport = 49155 (Broadcasts DIO) - diobcast_callback
-
 disrecv_sock
 dismcast_sock
 diobcast_sock
 diorecv_sock
-
 rpl_float_func()
 mcast_dis()
 bcast_dis()
 trickle_timer()
 dio_init()
 dis_init()
-
 1. disrecv_callback()
 	if (floating) 
 	  return
 	else
 	  start trickle timer (if tflag not set)
 	  unicast back DIO
-
         
 DIO Message Fields
-
 	uint16_t rank = 1; //16 bit rank
 	int grounded; //1 bit flag indicationg of node if grounded (1) or floating(0)
 	uint16_t *dodag_id; //128 bit IPV6 address
 	uint8_t etx; //estimated hops left, 8 bit
 	uint16_t nid; //self node id
 	uint8_t version;
-
 */
 
 /* TO DO
@@ -54,7 +45,7 @@ dio_ack: reset in dio_ack socket
 #include<stdlib.h>
 
 #define RPL_SYMBOLS \
-	{ LSTRKEY("ground_func"), LFUNCVAL(rpl_ground_func)}, \
+	{ LSTRKEY("root_func"), LFUNCVAL(rpl_root_func)}, \
 	{ LSTRKEY("float_func"), LFUNCVAL(rpl_float_func)}, \
 	
 #define disrecvport 49152 
@@ -63,6 +54,10 @@ dio_ack: reset in dio_ack socket
 #define diobcastport 49155
 
 int dismcast_callback(lua_State *L);
+int diobcast_callback(lua_State *L);
+int diorecv_callback(lua_State *L);
+int disrecv_callback(lua_State *L);
+
 int t_timeout(lua_State *L);
 
 //(rank, gf, dodag_id, etx, version)->nil
@@ -139,17 +134,25 @@ int bcast_dio(lua_State *L)
 
 int mcast_dis(lua_State *L)
 {
-	//libstorm_net_sendto(socket, payload, ip, port)
-	//multicast address: "ff02::1"
 	lua_pushlightfunction(L, libstorm_net_sendto);
 	lua_getglobal(L, "dismcast_sock");
 	lua_pushlightfunction(L, libmsgpack_mp_pack);
 	lua_getglobal(L, "DIS");
 	lua_call(L,1,1);
 	lua_pushstring(L, "ff02::1");
-	lua_pushnumber(L, dismcastport);
+	lua_pushnumber(L, disrecvport);
 	lua_call(L, 4, 1);
-	return 0;
+	
+	lua_getglobal(L, "dismflag");
+	if(lua_tonumber(L, -1)==1)
+	{
+		cord_set_continuation(L, mcast_dis, 0);
+		return nc_invoke_sleep(L, 5 * SECOND_TICKS); //can be changed
+	}
+	else
+	{
+		return cord_return(L, 0);
+	}
 }
 //args: i, inst
 //returns: 0 on oldinstance of trickle timer
@@ -310,7 +313,7 @@ int dismcast_callback(lua_State *L)
 int create_diobcast_socket(lua_State *L)
 {
 	lua_pushlightfunction(L, libstorm_net_udpsocket);
-	lua_pushnumber(L, dioport);
+	lua_pushnumber(L, diobcastport);
 	lua_pushlightfunction(L, diobcast_callback);
 	lua_call(L,2,1);
 	lua_setglobal(L, "diobcast_sock");
@@ -350,28 +353,7 @@ int create_diorecv_socket(lua_State *L)
 	return 0;
 }
 
-int mcast_dis(lua_State *L)
-{
-	lua_pushlightfunction(L, libstorm_net_sendto);
-	lua_getglobal(L, "dismcast_sock");
-	lua_pushlightfunction(L, libmsgpack_mp_pack);
-	lua_getglobal(L, "DIS");
-	lua_call(L,1,1);
-	lua_pushstring(L, "ff02::1");
-	lua_pushnumber(L, disrecvport);
-	lua_call(L, 4, 1);
-	
-	lua_getglobal(L, "dismflag");
-	if(lua_tonumber(L, -1)==1)
-	{
-		cord_set_continuation(L, mcast_dis, 0);
-		return nc_invoke_sleep(L, 5 * SECOND_TICKS); //can be changed
-	}
-	else
-	{
-		return 0;
-	}
-}
+
 
 //(Payload, srcip, srcport)
 //function called when dio msg received on eport
@@ -390,7 +372,7 @@ int diorecv_callback(lua_State *L)
 	if(lua_tonumber(L, -1)==1)
 	{
 		lua_pushlightfunction(L, libstorm_net_close);
-		lua_getglobal(L, dismcast_sock);
+		lua_getglobal(L, "dismcast_sock");
 		lua_call(L, 1, 0);
 		lua_pushnumber(L, 0);
 		lua_setglobal(L, "dismflag");
@@ -418,7 +400,7 @@ int diorecv_callback(lua_State *L)
 		lua_gettable(L, tab_index);
 		int p_rank = lua_tonumber(L, -1);
 		
-		if(s_rank==-1 || s_rank > p_rank+1))
+		if((s_rank==-1) || (s_rank > (p_rank+1)))
 		{
 			//set preferred parent as incoming DIO, which is on top of the stack
 			lua_pushvalue(L, tab_index);
@@ -618,15 +600,15 @@ int rpl_float_func(lua_State *L)
 	
 	//Set trickle timer parameters
 	//minimum interval size in seconds
-	lua_pushnumber(L, imin);
+	lua_pushnumber(L, 5);
 	lua_setglobal(L, "IMIN");
 		
 	//number of doublings of imin	
-	lua_pushnumber(L, imax);
+	lua_pushnumber(L, 16);
 	lua_setglobal(L, "IMAX");
 	
 	//number of consistent messages for no transmission
-	lua_pushnumber(L, k);
+	lua_pushnumber(L, 1);
 	lua_setglobal(L, "K");
 		
 	//set global trickle instance flag, to keep track whether we are running the right instance or an old instance
