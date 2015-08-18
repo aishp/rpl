@@ -25,6 +25,14 @@ trickle_timer()
 dio_init()
 dis_init()
 
+1. disrecv_callback()
+	if (floating) 
+	  return
+	else
+	  start trickle timer (if tflag not set)
+	  unicast back DIO
+
+        
 DIO Message Fields
 
 	uint16_t rank = 1; //16 bit rank
@@ -195,7 +203,7 @@ int i_timeout(lua_State *L)
 	if(g_inst!= l_inst)
 	{
 		//new instance of trickle timer has been started, this one must be stopped
-		return 0;
+		return cord_return(L, 0);
 	}
 	else
 	{
@@ -244,7 +252,7 @@ int t_timeout(lua_State *L)
 	if(g_inst!= l_inst)
 	{
 		//new instance of trickle timer has been started, this one must be stopped
-		return 0;
+		return cord_return(L, 0);
 	}
 	else
 	{
@@ -338,26 +346,7 @@ int dismcast_callback(lua_State *L)
 //actions to perform upon receipt of dis	
 int disrecv_callback(lua_State *L)
 {
-	//get DIS msg from payload
-	
-
-	char *srcip = (char *)lua_tostring(L, 2);
-	
-	lua_getglobal(L, "neighbor_table");
-	int nt_index=lua_gettop(L);
-	
-	lua_pushlightfunction(L, libmsgpack_mp_unpack);
-	lua_pushvalue(L, 1);
-	lua_call(L, 1, 1);
-	
-	lua_pushstring(L, "nodeid");
-	lua_gettable(L, -2);
-	
-	lua_pushstring(L, srcip);
-	lua_settable(L, nt_index);
-	lua_pushvalue(L, nt_index);
-	lua_setglobal(L, "neighbor_table");
-	
+	//if floating, don't respond with DIO
 	lua_getglobal(L, "DIO");
 	lua_pushstring(L, "grounded");
 	lua_gettable(L, -2);
@@ -365,86 +354,35 @@ int disrecv_callback(lua_State *L)
 	{
 		return 0;
 	}
+	//get DIS msg from payload
 	
-	//stop DIS multicast
-	lua_getglobal(L, "dismflag"); //flag that checks if dis is still being multicast
-	if(lua_tonumber(L, -1)==1)
-	{
-		lua_pushlightfunction(L, libstorm_net_close);
-		lua_getglobal(L, dismcast_sock);
-		lua_call(L, 1, 0);
-		lua_pushnumber(L, 0);
-		lua_setglobal(L, "dismflag");
-	}
 
+	char *srcip = (char *)lua_tostring(L, 2);
+	
+/*	//Should I unpack DIS??
+	lua_pushlightfunction(L, libmsgpack_mp_unpack);
+	lua_pushvalue(L, 1);
+	lua_call(L, 1, 1);
+*/
 
-	//trickle timer parameters
-	int imin = 5; 
-	int imax = 16; 
-	int k = 1; 
-	int nid=0; //node id of incoming DIO
-	
-	
-	lua_pushnil(L);
-	while (lua_next(L, -2))
-	{
-		
-		if(strcmp((char *)lua_tostring(L,-2), "node_id")==0)
-		{
-			nid= lua_tonumber(L, -1);
-			break;
-		}
-		lua_pop(L, 1);
-	}
-	lua_getglobal(L, "parent_table"); 
-	
-	//EDIT line: Get nodeid from table
-	lua_pushnumber(L, nid);// push node id
+	//Unicast back DIO
+	lua_pushlightfunction(L, libstorm_net_sendto);
+	lua_getglobal(L, "dis_sock");
+	lua_pushlightfunction(L, libmsgpack_mp_pack);
+	lua_getglobal(L, "DIO");
+	lua_call(L, 1, 1);
 	lua_pushstring(L, srcip);
-	lua_settable(L, -3);
-	lua_setglobal(L, "parent_table");
-
-//unicast back DIO
-	do
-	{
-		lua_pushlightfunction(L, libstorm_net_sendto);
-		lua_getglobal(L, "dis_sock");
-		lua_pushlightfunction(L, libmsgpack_mp_pack);
-		lua_getglobal(L, "DIO");
-		lua_call(L, 1, 1);
-		lua_pushstring(L, srcip);
-		lua_pushnumber(L, disport);
-		lua_call(L,4,1);
-		lua_getglobal(L, "dio_ack"); //by default set it to 1, change later
-	}while(lua_tonumber(L,-1)!=1);
+	lua_pushnumber(L, diorecvport);
+	lua_call(L,4,1);
+	lua_getglobal(L, "dio_ack"); //by default set it to 1, change later
+	
 	
 	lua_getglobal(L, "TFLAG");
-	
 	if(lua_tonumber(L, -1)==0)
 	{
-		//minimum interval size in seconds
-		lua_pushnumber(L, imin);
-		lua_setglobal(L, "IMIN");
-		
-		//number of doublings of imin	
-		lua_pushnumber(L, imax);
-		lua_setglobal(L, "IMAX");
-	
-		//number of consistent messages for no transmission
-		lua_pushnumber(L, k);
-		lua_setglobal(L, "K");
-		
-		//set TFLAG to show that trickle timer is now running
+		//set TFLAG to show that trickle timer is currently running
 		lua_pushnumber(L, 1);
 		lua_setglobal(L, "TFLAG");
-		
-		//set global trickle instance flag, to keep track whether we are running the right instance or an old instance
-		lua_pushnumber(L, 0);
-		lua_setglobal(L, "TRICKLE_INSTANCE"); 
-		
-		//socket for DIO bcast according to trickle timer
-		lua_pushlightfunction(L, create_dio_bsocket);
-		lua_call(L, 0, 0);
 		
 		//call the trickle timer, let it run concurrently in the background
 		lua_pushlightfunction(L, trickle_timer);
@@ -452,7 +390,6 @@ int disrecv_callback(lua_State *L)
 	}
 
 	return 0;
-	      
 }
 
 //for DIO broadcast according to trickle timer
@@ -469,7 +406,6 @@ int create_diobcast_socket(lua_State *L)
 //create socket for receiving dis messages
 int create_disrecv_socket(lua_State *L)
 {
-	
 	lua_pushlightfunction(L, libstorm_net_udpsocket);
 	lua_pushnumber(L, disrecvport);
 	lua_pushlightfunction(L, disrecv_callback);
@@ -537,6 +473,23 @@ int rpl_ground_func(lua_State *L)
 	lua_pushnumber(L, 0);
 	lua_setglobal(L, "TFLAG");
 
+	//Set trickle timer parameters
+	//minimum interval size in seconds
+	lua_pushnumber(L, 5);
+	lua_setglobal(L, "IMIN");
+		
+	//number of doublings of imin	
+	lua_pushnumber(L, 16);
+	lua_setglobal(L, "IMAX");
+	
+	//number of consistent messages for no transmission
+	lua_pushnumber(L, 1);
+	lua_setglobal(L, "K");
+		
+	//set global trickle instance flag, to keep track whether we are running the right instance or an old instance
+	lua_pushnumber(L, 0);
+	lua_setglobal(L, "TRICKLE_INSTANCE"); 
+	
 	//set dio_ack to 1 for now
 	lua_pushnumber(L, 1);
 	lua_setglobal(L, "dio_ack");
@@ -709,11 +662,24 @@ int rpl_float_func(lua_State *L)
 	//set TFLAg to 0 to show that trickle timer is not currently running
 	lua_pushnumber(L, 0);
 	lua_setglobal(L, "TFLAG");
-
-	//set dio_ack to 1 for now
-	lua_pushnumber(L, 1);
-	lua_setglobal(L, "dio_ack");
 	
+	//Set trickle timer parameters
+	//minimum interval size in seconds
+	lua_pushnumber(L, imin);
+	lua_setglobal(L, "IMIN");
+		
+	//number of doublings of imin	
+	lua_pushnumber(L, imax);
+	lua_setglobal(L, "IMAX");
+	
+	//number of consistent messages for no transmission
+	lua_pushnumber(L, k);
+	lua_setglobal(L, "K");
+		
+	//set global trickle instance flag, to keep track whether we are running the right instance or an old instance
+	lua_pushnumber(L, 0);
+	lua_setglobal(L, "TRICKLE_INSTANCE"); 
+
 	//set empty parent table
 	lua_newtable(L);
 	lua_setglobal(L, "parent_table");
@@ -721,6 +687,7 @@ int rpl_float_func(lua_State *L)
 	//set empty routing table
 	lua_newtable(L);
 	lua_setglobal(L, "routing_table");
+
 
 	return 0;
 }
