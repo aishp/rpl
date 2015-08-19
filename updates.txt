@@ -1,0 +1,32 @@
+1. Floating node: 
+  Actions to perform upon DIS receipt:
+    1. if (floating) return
+       else
+        start trickle timer (if tflag not set)
+        unicast back DIO
+    2. What is the use of DIS? Should I even unpack it?
+2. Actions to perform upon receipt of DIO
+  1. if dis is being multicast-> stop mcast
+  2. add to parent table
+  3. self rank = -1 or self_rank>new_rank+1
+      new pref parent
+      re-init DIO
+      new instance of trickle timer
+    else
+      trickle counter ++
+  
+      
+3. Trickle timer
+  When should trickle timer be reset?
+
+
+Questions
+1. Does a node need to know it's children?
+2. Returning from trickle timer when instance has changed: return cord_return(L,0)?
+3. Recv DIS: What is the DIS used for?
+4. Can we assume that root never dies (root is the node connected to border router)
+5. What should DIS contain?
+6. What happens when a root receives a DIO? (No action?)
+7. Does root change trickle instance only for global repair? Does root participate in local repair?
+8. When does a global repair take place?
+
