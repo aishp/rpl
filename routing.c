@@ -52,12 +52,13 @@ dio_ack: reset in dio_ack socket
 #define diorecvport 49153
 #define dismcastport 49154
 #define diobcastport 49155
+#define daoport 49156
 
 int dismcast_callback(lua_State *L);
 int diobcast_callback(lua_State *L);
 int diorecv_callback(lua_State *L);
 int disrecv_callback(lua_State *L);
-
+int daorecv_callback(lua_State *L);
 int t_timeout(lua_State *L);
 
 //(rank, gf, dodag_id, etx, version)->nil
@@ -286,6 +287,124 @@ int trickle_timer(lua_State *L)
 	
 }
 
+//(direction, cc)
+int daorecv_callback(lua_State *L)
+{
+	if(lua_tonumber(L,1)==0) //downward route
+	{
+		return 0;
+	}
+	
+	lua_getglobal(L, "DIO");
+	lua_pushstring(L, "rank");
+	lua_gettable(L, -2);
+	if(lua_tonumber(L, -1)==1)//DAO has reached the root
+	{
+		//check if this node's entry exists in the routing table.
+		//if yes: change route to new value
+		//if not: add route to routing table
+		return 0;
+	}
+	if(lua_tonumber(L, 2)<=lua_tonumber(L, -1))
+	{
+		//inconsistent state reached, loop detected
+	}
+	if(lua_tonumber(L, 2)>lua_tonumber(L, -1))
+	{
+		int cc = lua_tonumber(L, -1); //new consistency value to be propagated 
+	}
+	
+/*	add current ip to header prefix
+	send packet to preferred parent
+	wait for ACK
+	if no ACK: 
+		find new preferred parent from parent set
+		send DAO to new parent
+		restart trickle timer
+	
+*/
+		
+}
+
+//(prefix table)->nil
+/*
+	Prefix Table:
+		Dest: Ip ADDR
+		Hop : int
+		cc :int
+		1-> ip addr
+		2-> ip addr
+		...
+		...
+*/
+int send_dao(lua_State *L)
+{
+	lua_pushlightfunction(L, libmsgpack_mp_unpack);
+	lua_pushvalue(L, 1);
+	lua_call(L, 1, 1);
+	int t_idx = lua_gettop(L); //index of prefix table
+	lua_pushstring(L, hop);
+	lua_gettable(L, t_idx);
+	int hop = lua_tonumber(L, -1);
+	lua_pop(L, 1);
+	lua_pushnumber(L, hop+1);
+	lua_pushlightfunction(L, libstorm_net_getipaddrstring);
+	lua_call(L,0,1);
+	lua_settable(L , t_idx);
+	lua_pushstring(L, "hop");
+	lua_pushnumber(L, hop+1);
+	lua_settable(L, t_idx);
+	
+	lua_pushlightfunction(L, libstorm_net_sendto);
+	lua_getglobal(L, "dao_socket");
+	lua_pushlightfunction(L, libmsgpack_mp_pack);
+	lua_pushvalue(L, t_idx);
+	lua_call(L,1,1);
+	lua_getglobal(L, "PrefParent");
+	lua_pushnumber(L, daoport);
+	lua_call(L, 4, 1);
+	
+	lua_pushlightfunction(L, libmsgpack_mp_pack);
+	lua_pushvalue(L, tab_index);
+	lua_call(L, 1, 1);
+	cord_set_continuation(L, check_daoack, 1);
+	return nc_invoke_sleep(L, 5 * SECOND_TICKS); //can be changed
+	
+}
+
+int check_daoack(lua_State *L)
+{
+	lua_pushlightfunction(L, libmsgpack_mp_unpack);
+	lua_pushvalue(L, lua_upvalueindex(1));
+	lua_call(L, 1, 1);
+	int t_idx=lua_gettop(L);
+	
+	lua_pushstring(L, "dest");
+	lua_gettable(L, t_idx);
+	char *d_ip= (char *)lua_tostring(L, -1);
+	
+	lua_getglobal(L, "DAO_ACK");
+	int dt_idx=lua_gettop(L);
+	lua_pushstring(L, -2); //ip address of required destination
+	lua_gettable(L, -2);
+	
+	if(isnil(L, -1)) //No dao_ack for this ip addr
+	{
+		lua_pushlightfunction(L, send_dao);
+		lua_pushvalue(L, 1); //push the packed prefix table onto the stack
+		lua_call(L, 1, 0);
+	}
+	else //ACK Received, no need to call send again, remove DAO_ACK from table
+	{
+		lua_pushstring(L, d_ip);
+		lua_pushnil(L);
+		lua_settable(L, dt_idx);
+		lua_pushvalue(L, dt_idx);
+		lua_setglobal(L, "DAO_ACK");
+	}
+	return 0;
+}
+
 //actions to be performed upon receipt of msg on DIO bcast socket
 int diobcast_callback(lua_State *L)
 {
@@ -306,6 +425,17 @@ int dismcast_callback(lua_State *L)
 	
 	printf("Received %s from %s on port %u (DIS mcast)\n", pay, srcip, (unsigned int)srcport);
 	
+	return 0;
+}
+
+//for receiving DAO messages 
+int create_dao_socket(lua_State *L)
+{
+	lua_pushlightfunction(L, libstorm_net_udpsocket);
+	lua_pushnumber(L, daoport);
+	lua_pushlightfunction(L, daorecv_callback);
+	lua_call(L,2,1);
+	lua_setglobal(L, "dao_sock");
 	return 0;
 }
 
@@ -403,7 +533,7 @@ int diorecv_callback(lua_State *L)
 		if((s_rank==-1) || (s_rank > (p_rank+1)))
 		{
 			//set preferred parent as incoming DIO, which is on top of the stack
-			lua_pushvalue(L, tab_index);
+			lua_pushstring(L, srcip);
 			lua_setglobal(L, "PrefParent");
 			lua_pop(L, 1);
 			
