@@ -212,7 +212,6 @@ int t_timeout(lua_State *L)
 	int i= lua_tonumber(L, lua_upvalueindex(2));
 	int l_inst= lua_tonumber(L, lua_upvalueindex(3)); //local instance number
 	
-	
 	//first check if the current trickle instance is same as instance running
 	//global instance
 	lua_getglobal(L, "TRICKLE_INSTANCE");
@@ -232,8 +231,6 @@ int t_timeout(lua_State *L)
 			lua_pushlightfunction(L, bcast_dio);
 			lua_call(L, 0, 0);
 		}
-	
-		
 		lua_pushnumber(L, i);
 		lua_pushnumber(L, l_inst); 
 		cord_set_continuation(L, i_timeout, 2);
@@ -284,7 +281,6 @@ int trickle_timer(lua_State *L)
 	lua_getglobal(L, "TRICKLE_INSTANCE"); 
 	cord_set_continuation(L, t_timeout, 3);
 	return nc_invoke_sleep(L, t * SECOND_TICKS);
-	
 }
 
 //(direction, cc)
@@ -343,10 +339,12 @@ int send_dao(lua_State *L)
 	lua_pushvalue(L, 1);
 	lua_call(L, 1, 1);
 	int t_idx = lua_gettop(L); //index of prefix table
+	
 	lua_pushstring(L, hop);
 	lua_gettable(L, t_idx);
 	int hop = lua_tonumber(L, -1);
-	lua_pop(L, 1);
+	
+	lua_pop(L, 1); //pop the old hop, increment
 	lua_pushnumber(L, hop+1);
 	lua_pushlightfunction(L, libstorm_net_getipaddrstring);
 	lua_call(L,0,1);
@@ -364,12 +362,12 @@ int send_dao(lua_State *L)
 	lua_pushnumber(L, daoport);
 	lua_call(L, 4, 1);
 	
+	//Check if DAO_ACK has been received after 5 seconds
 	lua_pushlightfunction(L, libmsgpack_mp_pack);
 	lua_pushvalue(L, tab_index);
 	lua_call(L, 1, 1);
 	cord_set_continuation(L, check_daoack, 1);
 	return nc_invoke_sleep(L, 5 * SECOND_TICKS); //can be changed
-	
 }
 
 int check_daoack(lua_State *L)
@@ -390,6 +388,77 @@ int check_daoack(lua_State *L)
 	
 	if(isnil(L, -1)) //No dao_ack for this ip addr
 	{
+		lua_getglobal(L, "PFLAG");
+		int pflag = lua_tonumber(L, -1);
+		if(pflag > 5) //more than 5 retransmissions already occured to this parent
+		{
+			//Parent is dead, find new parent
+			lua_getglobal(L, "parent_table");
+			int p_idx=lua_gettop(L);
+			lua_pushnil(L);
+			
+			if(lua_next(L, p_idx)==0) // no elements in the parent table
+			{
+				//send poisoning DIO to release all children 
+				//rebroadcast DIS
+				//reinitialise dio, dis, all tables
+			}
+			else
+			{
+				int ret = 1;
+				while(isnil(L, -1) && ret!=0) // parent has been removed from the table
+				{
+					lua_pop(L, 1);
+					ret = lua_next(L, p_idx);
+				}
+				if(ret == 0)
+				{
+					//send poisoning DIO to release all children 
+					//rebroadcast DIS
+					//reinitialise dio, dis, all tables
+				}
+				
+				//IP Addr of next parent is at index -2
+				char *p_ip = (char *)lua_tostring(L, -2);
+				int p_rank = lua_tonumber(L, -1); //rank of new parent
+				lua_pop(L, 1); //now Parent IP is on top of the stack (after popping rank)
+				lua_setglobal(L, "PrefParent");
+				
+				//remove node from parent table
+				lua_pushvalue(L, -2); //node id of new parent
+				int ref = luaL_ref (L, p_idx);
+				luaL_unref(L, p_idx, ref);
+				
+				//remove all nodes from parent table whose rank is less than new rank
+				lua_pushnil(L);
+				while(lua_next(L, p_idx)!=0)
+				{
+					lua_pushvalue(L, -2); // srcip (key) of next parent)
+					ref = luaL_ref (L, p_idx);
+					if(lua_tonumber(L, -1) > p_rank)
+					{
+						luaL_unref(L, p_idx, ref); //remove entry from table
+					}
+					lua_pop(L, 1);
+				}
+				
+				//send dis to preferred parent, wait for DIO
+				lua_pushlightfunction(L, libstorm_net_sendto);
+				lua_getglobal(L,"diomcast_sock");
+				lua_pushlightfunction(L, libmsgpack_mp_pack);
+				lua_getglobal(L, "DIS");
+				lua_call(L, 1, 1);
+				lua_pushstring(L, p_ip);
+				lua_pushnumber(L, disrecvport);
+				lua_call(L, 4, 1); 
+				
+			}
+			lua_pushnumber(L, 0);
+			lua_setglobal(L, "PFLAG");
+			return 0;
+		}
+		lua_pushnumber(L, pflag + 1);
+		lua_setglobal(L, "PFLAG");
 		lua_pushlightfunction(L, send_dao);
 		lua_pushvalue(L, 1); //push the packed prefix table onto the stack
 		lua_call(L, 1, 0);
@@ -397,10 +466,14 @@ int check_daoack(lua_State *L)
 	else //ACK Received, no need to call send again, remove DAO_ACK from table
 	{
 		lua_pushstring(L, d_ip);
-		lua_pushnil(L);
-		lua_settable(L, dt_idx);
+		int ref = luaL_ref (L, p_idx);
+		luaL_unref(L, p_idx, ref);
+		
 		lua_pushvalue(L, dt_idx);
 		lua_setglobal(L, "DAO_ACK");
+		
+		lua_pushnumber(L, 0);
+		lua_setglobal(L, "PFLAG"); //Parent flag, to check if prefparent is alive
 	}
 	return 0;
 }
@@ -511,25 +584,27 @@ int diorecv_callback(lua_State *L)
 	lua_getglobal(L, "DIO");
 	int self_dio= lua_gettop(L); 
 	
-	lua_pushstring(L, "rank");
-	lua_gettable(L, self_dio);
-	
 	if(lua_tonumber(L, -1)>1) // not a root node
 	{
-		int s_rank = lua_tonumber(L, -1);
 		
-		//add to parent list
-		lua_getglobal(L, "parent_table");
-		lua_pushstring(L, "node_id");
-		lua_gettable(L, tab_index);
-		lua_pushstring(L, srcip);
-		lua_settable(L, -3);
-		lua_setglobal(L, "parent_table");
+		lua_pushstring(L, "rank");
+		lua_gettable(L, self_dio);
+		int s_rank = lua_tonumber(L, -1);
 		
 		lua_pushstring(L, "rank");
 		lua_gettable(L, tab_index);
 		int p_rank = lua_tonumber(L, -1);
 		
+		if(p_rank < s_rank)
+		{
+			//add to parent list
+			lua_getglobal(L, "parent_table");
+			lua_pushstring(L, srcip);
+			lua_pushnumber(L, p_rank);
+			lua_settable(L, -3);
+			lua_setglobal(L, "parent_table");
+		}
+	
 		if((s_rank==-1) || (s_rank > (p_rank+1)))
 		{
 			//set preferred parent as incoming DIO, which is on top of the stack
