@@ -395,8 +395,8 @@ int check_daoack(lua_State *L)
 			//Parent is dead, find new parent
 			lua_getglobal(L, "parent_table");
 			int p_idx=lua_gettop(L);
-			lua_pushnil(L);
 			
+			lua_pushnil(L);
 			if(lua_next(L, p_idx)==0) // no elements in the parent table
 			{
 				//send poisoning DIO to release all children 
@@ -405,18 +405,6 @@ int check_daoack(lua_State *L)
 			}
 			else
 			{
-				int ret = 1;
-				while(isnil(L, -1) && ret!=0) // parent has been removed from the table
-				{
-					lua_pop(L, 1);
-					ret = lua_next(L, p_idx);
-				}
-				if(ret == 0)
-				{
-					//send poisoning DIO to release all children 
-					//rebroadcast DIS
-					//reinitialise dio, dis, all tables
-				}
 				
 				//IP Addr of next parent is at index -2
 				char *p_ip = (char *)lua_tostring(L, -2);
@@ -425,7 +413,7 @@ int check_daoack(lua_State *L)
 				lua_setglobal(L, "PrefParent");
 				
 				//remove node from parent table
-				lua_pushvalue(L, -2); //node id of new parent
+				lua_pushstring(L, p_ip);
 				int ref = luaL_ref (L, p_idx);
 				luaL_unref(L, p_idx, ref);
 				
@@ -433,11 +421,12 @@ int check_daoack(lua_State *L)
 				lua_pushnil(L);
 				while(lua_next(L, p_idx)!=0)
 				{
-					lua_pushvalue(L, -2); // srcip (key) of next parent)
-					ref = luaL_ref (L, p_idx);
 					if(lua_tonumber(L, -1) > p_rank)
 					{
+						lua_pushvalue(L, -2); // srcip (key) of next parent)
+						ref = luaL_ref (L, p_idx);
 						luaL_unref(L, p_idx, ref); //remove entry from table
+						//lua_pop(L, 1); //if lua_unref does not pop reference from top of the stack
 					}
 					lua_pop(L, 1);
 				}
@@ -452,6 +441,7 @@ int check_daoack(lua_State *L)
 				lua_pushnumber(L, disrecvport);
 				lua_call(L, 4, 1); 
 				
+				//send new DAO all the way to the root with your own information
 			}
 			lua_pushnumber(L, 0);
 			lua_setglobal(L, "PFLAG");
@@ -711,8 +701,8 @@ int rpl_root_func(lua_State *L)
 	lua_pushlightfunction(L, dio_init);
 	lua_pushnumber(L, 1); //rank of root
 	lua_pushnumber(L, 1); //root is grounded
-	lua_pushlightfunction(L, libstorm_os_getnodeid);
-	lua_call(L, 0, 1);//dodag id is same as node id for root
+	lua_pushlightfunction(L, libstorm_os_getipaddrstring);
+	lua_call(L, 0, 1);//dodag id is same as ip addr for root
 	lua_pushnumber(L, 0); //etx is 0, directly connected to border router
 	lua_pushnumber(L, 1);//version 1
 	lua_call(L, 5, 0); 
@@ -746,16 +736,11 @@ int rpl_root_func(lua_State *L)
 	lua_pushnumber(L, 0);
 	lua_setglobal(L, "dismflag");
 	
-	//set empty parent table
-	lua_newtable(L);
-	lua_setglobal(L, "parent_table");
-	
-	//set empty routing table
+	//set empty routing table (routing table only for root node)
 	lua_newtable(L);
 	lua_setglobal(L, "routing_table");
 
 	return 0;
-	
 }
 
 int rpl_float_func(lua_State *L)
@@ -820,13 +805,9 @@ int rpl_float_func(lua_State *L)
 	lua_pushnumber(L, 0);
 	lua_setglobal(L, "TRICKLE_INSTANCE"); 
 
-	//set empty parent table
+	//set empty parent table (only for non-root nodes)
 	lua_newtable(L);
 	lua_setglobal(L, "parent_table");
-	
-	//set empty routing table
-	lua_newtable(L);
-	lua_setglobal(L, "routing_table");
 
 	return 0;
 }
