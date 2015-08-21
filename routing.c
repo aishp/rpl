@@ -574,12 +574,13 @@ int diorecv_callback(lua_State *L)
 	lua_getglobal(L, "DIO");
 	int self_dio= lua_gettop(L); 
 	
+	
+	lua_pushstring(L, "rank");
+	lua_gettable(L, self_dio);
+	int s_rank = lua_tonumber(L, -1);
+	
 	if(lua_tonumber(L, -1)>1) // not a root node
 	{
-		
-		lua_pushstring(L, "rank");
-		lua_gettable(L, self_dio);
-		int s_rank = lua_tonumber(L, -1);
 		
 		lua_pushstring(L, "rank");
 		lua_gettable(L, tab_index);
@@ -595,7 +596,7 @@ int diorecv_callback(lua_State *L)
 			lua_setglobal(L, "parent_table");
 		}
 	
-		if((s_rank==-1) || (s_rank > (p_rank+1)))
+		if((s_rank == 10000) || (s_rank > (p_rank+1)))
 		{
 			//set preferred parent as incoming DIO, which is on top of the stack
 			lua_pushstring(L, srcip);
